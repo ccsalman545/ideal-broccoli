@@ -5,89 +5,80 @@ CFLAGS := -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
 
 CPPFLAGS := -Iinclude -Ithird_party/mongoose
 
-# =================================================
-# Camera Sender
-# =================================================
+BUILD_DIR := build
 
-CAMERA_TARGET := build/camera_sender
+HTTP_OBJECTS := \
+	$(BUILD_DIR)/src/http_main.o \
+	$(BUILD_DIR)/src/http_server.o \
+	$(BUILD_DIR)/src/frame_stream.o \
+	$(BUILD_DIR)/third_party/mongoose/mongoose.o
 
-CAMERA_SRC := \
-	src/main.c \
-	src/frame.c \
-	src/camera_v4l2.c \
-	src/transport_tcp.c
-
-CAMERA_OBJ := \
-	build/src/main.o \
-	build/src/frame.o \
-	build/src/camera_v4l2.o \
-	build/src/transport_tcp.o
+CAMERA_OBJECTS := \
+	$(BUILD_DIR)/src/main.o \
+	$(BUILD_DIR)/src/frame.o \
+	$(BUILD_DIR)/src/camera_v4l2.o \
+	$(BUILD_DIR)/src/transport_tcp.o
 
 
-# =================================================
-# Mongoose HTTP Server
-# =================================================
-
-HTTP_TARGET := build/http_server
-
-HTTP_OBJ := \
-	build/src/http_main.o \
-	build/src/http_server.o \
-	build/third_party/mongoose/mongoose.o
-
-
-# =================================================
-# Main Targets
-# =================================================
-
-.PHONY: all camera http clean
+.PHONY: all clean http camera
 
 all: camera http
 
-camera: $(CAMERA_TARGET)
 
-http: $(HTTP_TARGET)
+# Camera sender
+camera: $(BUILD_DIR)/camera_sender
 
-
-# =================================================
-# Link Camera Sender
-# =================================================
-
-$(CAMERA_TARGET): $(CAMERA_OBJ)
+$(BUILD_DIR)/camera_sender: $(CAMERA_OBJECTS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(CAMERA_OBJ) -o $@
+	$(CC) $(CFLAGS) $^ -o $@
 
 
-# =================================================
-# Link HTTP Server
-# =================================================
+# HTTP/WebSocket server
+http: $(BUILD_DIR)/http_server
 
-$(HTTP_TARGET): $(HTTP_OBJ)
+$(BUILD_DIR)/http_server: $(HTTP_OBJECTS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(HTTP_OBJ) -o $@
+	$(CC) $(CFLAGS) $^ -o $@
 
 
-# =================================================
-# Compile Project Source Files
-# =================================================
+# Camera source files
+$(BUILD_DIR)/src/main.o: src/main.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-build/src/%.o: src/%.c
+$(BUILD_DIR)/src/frame.o: src/frame.c include/frame.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/src/camera_v4l2.o: src/camera_v4l2.c include/camera_v4l2.h include/frame.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/src/transport_tcp.o: src/transport_tcp.c include/transport_tcp.h include/frame.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 
-# =================================================
-# Compile Mongoose
-# =================================================
+# HTTP/WebSocket source files
+$(BUILD_DIR)/src/http_main.o: src/http_main.c include/http_server.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-build/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c
+$(BUILD_DIR)/src/http_server.o: src/http_server.c include/http_server.h include/frame_stream.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/src/frame_stream.o: src/frame_stream.c include/frame_stream.h include/frame.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+
+# Mongoose
+$(BUILD_DIR)/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c third_party/mongoose/mongoose.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -include alloca.h -c $< -o $@
 
 
-# =================================================
-# Clean Build
-# =================================================
-
+# Clean build files
 clean:
-	rm -rf build
+	rm -rf $(BUILD_DIR)
