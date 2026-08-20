@@ -19,18 +19,15 @@ struct HttpServer {
 
 
 /*
- * HTTP/WebSocket event handler
+ * HTTP + WebSocket event handler.
  */
 static void http_event_handler(
     struct mg_connection *c,
     int ev,
     void *ev_data)
 {
-    /*
-     * fn_data contains the HttpServer pointer that was supplied
-     * when the listener was created.
-     */
-    HttpServer *server = (HttpServer *) c->fn_data;
+    HttpServer *server =
+        (HttpServer *) c->fn_data;
 
     switch (ev) {
 
@@ -44,15 +41,27 @@ static void http_event_handler(
         /*
          * WebSocket endpoint.
          */
-        if (mg_match(hm->uri, mg_str("/ws"), NULL)) {
-            mg_ws_upgrade(c, hm, NULL);
+        if (mg_match(
+                hm->uri,
+                mg_str("/ws"),
+                NULL)) {
+
+            mg_ws_upgrade(
+                c,
+                hm,
+                NULL
+            );
+
             return;
         }
 
         /*
-         * HTTP status page.
+         * Main HTTP status page.
          */
-        if (mg_match(hm->uri, mg_str("/"), NULL)) {
+        if (mg_match(
+                hm->uri,
+                mg_str("/"),
+                NULL)) {
 
             mg_http_reply(
                 c,
@@ -68,6 +77,7 @@ static void http_event_handler(
                 "<h1>Camera Server</h1>"
                 "<p>HTTP server is running.</p>"
                 "<p>WebSocket endpoint: /ws</p>"
+                "<p>Camera frame streaming is enabled.</p>"
                 "</body>"
                 "</html>"
             );
@@ -93,13 +103,18 @@ static void http_event_handler(
      * WebSocket connection established.
      */
     case MG_EV_WS_OPEN: {
-        printf("WebSocket client connected\n");
+
+        printf(
+            "WebSocket client connected\n"
+        );
 
         /*
-         * Register this connection as the active
-         * frame-stream client.
+         * Register this connection as
+         * the current frame-stream client.
          */
-        if (server != NULL && server->frame_stream != NULL) {
+        if (server != NULL &&
+            server->frame_stream != NULL) {
+
             frame_stream_set_client(
                 server->frame_stream,
                 c
@@ -109,17 +124,15 @@ static void http_event_handler(
         /*
          * Send connection confirmation.
          */
-        {
-            const char *message =
-                "Camera server WebSocket connected";
+        const char *message =
+            "Camera server WebSocket connected";
 
-            mg_ws_send(
-                c,
-                message,
-                strlen(message),
-                WEBSOCKET_OP_TEXT
-            );
-        }
+        mg_ws_send(
+            c,
+            message,
+            strlen(message),
+            WEBSOCKET_OP_TEXT
+        );
 
         break;
     }
@@ -129,6 +142,7 @@ static void http_event_handler(
      * WebSocket message received.
      */
     case MG_EV_WS_MSG: {
+
         struct mg_ws_message *wm =
             (struct mg_ws_message *) ev_data;
 
@@ -140,6 +154,9 @@ static void http_event_handler(
 
         /*
          * Echo the received message.
+         *
+         * This is currently used as a basic
+         * communication test.
          */
         mg_ws_send(
             c,
@@ -156,12 +173,18 @@ static void http_event_handler(
      * Connection closed.
      */
     case MG_EV_CLOSE: {
-        printf("Client connection closed\n");
+
+        printf(
+            "Client connection closed\n"
+        );
 
         /*
-         * Remove this connection from the frame stream.
+         * Remove the connection from the
+         * frame streaming context.
          */
-        if (server != NULL && server->frame_stream != NULL) {
+        if (server != NULL &&
+            server->frame_stream != NULL) {
+
             frame_stream_clear_client(
                 server->frame_stream,
                 c
@@ -179,7 +202,7 @@ static void http_event_handler(
 
 
 /*
- * Start HTTP/WebSocket server.
+ * Start the HTTP/WebSocket server.
  */
 HttpServer *http_server_start(
     const char *listen_address,
@@ -197,12 +220,12 @@ HttpServer *http_server_start(
         return NULL;
     }
 
-
     /*
      * Initialize Mongoose manager.
      */
-    mg_mgr_init(&server->mgr);
-
+    mg_mgr_init(
+        &server->mgr
+    );
 
     /*
      * Create frame-stream context.
@@ -211,20 +234,27 @@ HttpServer *http_server_start(
         frame_stream_create();
 
     if (server->frame_stream == NULL) {
+
         fprintf(
             stderr,
             "Failed to create FrameStream\n"
         );
 
-        mg_mgr_free(&server->mgr);
+        mg_mgr_free(
+            &server->mgr
+        );
+
         free(server);
 
         return NULL;
     }
 
-
     /*
-     * Build listening address.
+     * Construct listen address.
+     *
+     * Example:
+     *
+     * 192.168.1.10:8080
      */
     char address[64];
 
@@ -236,17 +266,17 @@ HttpServer *http_server_start(
         (unsigned int) port
     );
 
-
     printf(
         "Starting HTTP server on %s\n",
         address
     );
 
-
     /*
      * Start Mongoose HTTP listener.
      *
-     * The 'server' pointer is passed as fn_data.
+     * The HttpServer pointer is stored in
+     * c->fn_data and retrieved by the
+     * event handler.
      */
     server->listener =
         mg_http_listen(
@@ -256,8 +286,8 @@ HttpServer *http_server_start(
             server
         );
 
-
     if (server->listener == NULL) {
+
         fprintf(
             stderr,
             "Failed to start HTTP server on %s\n",
@@ -268,15 +298,16 @@ HttpServer *http_server_start(
             server->frame_stream
         );
 
-        mg_mgr_free(&server->mgr);
+        mg_mgr_free(
+            &server->mgr
+        );
+
         free(server);
 
         return NULL;
     }
 
-
     server->running = true;
-
 
     printf(
         "HTTP server started successfully\n"
@@ -292,13 +323,42 @@ HttpServer *http_server_start(
         address
     );
 
+    printf(
+        "Press Ctrl+C to stop the server.\n"
+    );
 
     return server;
 }
 
 
 /*
- * Run the Mongoose event loop.
+ * Process Mongoose events once.
+ *
+ * This function is useful when the camera
+ * capture loop needs to run alongside the
+ * HTTP/WebSocket event loop.
+ */
+void http_server_poll(
+    HttpServer *server,
+    int timeout_ms)
+{
+    if (server == NULL) {
+        return;
+    }
+
+    if (!server->running) {
+        return;
+    }
+
+    mg_mgr_poll(
+        &server->mgr,
+        timeout_ms
+    );
+}
+
+
+/*
+ * Run the Mongoose event loop continuously.
  */
 void http_server_run(
     HttpServer *server)
@@ -307,11 +367,9 @@ void http_server_run(
         return;
     }
 
-
     printf(
         "HTTP server event loop started\n"
     );
-
 
     while (server->running) {
 
@@ -321,9 +379,35 @@ void http_server_run(
         );
     }
 
-
     printf(
         "HTTP server event loop stopped\n"
+    );
+}
+
+
+/*
+ * Send a camera frame through the
+ * currently connected WebSocket client.
+ */
+int http_server_send_frame(
+    HttpServer *server,
+    const Frame *frame)
+{
+    if (server == NULL) {
+        return -1;
+    }
+
+    if (server->frame_stream == NULL) {
+        return -1;
+    }
+
+    if (frame == NULL) {
+        return -1;
+    }
+
+    return frame_stream_send(
+        server->frame_stream,
+        frame
     );
 }
 
@@ -338,13 +422,12 @@ void http_server_stop(
         return;
     }
 
-
     server->running = false;
 }
 
 
 /*
- * Destroy the server.
+ * Destroy the server and release resources.
  */
 void http_server_destroy(
     HttpServer *server)
@@ -353,28 +436,28 @@ void http_server_destroy(
         return;
     }
 
-
     server->running = false;
 
-
     /*
-     * Destroy frame-stream context.
+     * Destroy frame streaming context.
      */
-    frame_stream_destroy(
-        server->frame_stream
-    );
+    if (server->frame_stream != NULL) {
 
+        frame_stream_destroy(
+            server->frame_stream
+        );
+
+        server->frame_stream = NULL;
+    }
 
     /*
-     * Free Mongoose resources.
+     * Release Mongoose resources.
      */
     mg_mgr_free(
         &server->mgr
     );
 
-
     free(server);
-
 
     printf(
         "HTTP server destroyed\n"

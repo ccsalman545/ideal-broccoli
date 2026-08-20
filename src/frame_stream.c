@@ -6,24 +6,12 @@
 #include "mongoose.h"
 #include "frame_stream.h"
 
-/*
- * Simple frame-streaming context.
- *
- * The WebSocket connection itself is owned by Mongoose.
- * We only keep a non-owning pointer to it.
- */
+#define FRAME_PACKET_MAGIC 0x4652414D
+
 struct FrameStream {
     struct mg_connection *client;
 };
 
-/*
- * Wire-format header.
- *
- * This metadata is sent before every frame.
- *
- * All fields are fixed-width integers so the network
- * protocol does not depend on the size of C types.
- */
 typedef struct {
     uint32_t magic;
     uint32_t width;
@@ -35,9 +23,6 @@ typedef struct {
 } FramePacketHeader;
 
 
-/*
- * Create frame stream.
- */
 FrameStream *frame_stream_create(void)
 {
     FrameStream *stream = calloc(1, sizeof(*stream));
@@ -47,15 +32,10 @@ FrameStream *frame_stream_create(void)
         return NULL;
     }
 
-    stream->client = NULL;
-
     return stream;
 }
 
 
-/*
- * Attach a WebSocket client.
- */
 void frame_stream_set_client(
     FrameStream *stream,
     struct mg_connection *connection)
@@ -70,9 +50,6 @@ void frame_stream_set_client(
 }
 
 
-/*
- * Detach a WebSocket client.
- */
 void frame_stream_clear_client(
     FrameStream *stream,
     struct mg_connection *connection)
@@ -81,9 +58,6 @@ void frame_stream_clear_client(
         return;
     }
 
-    /*
-     * Only clear the client if it is the same connection.
-     */
     if (stream->client == connection) {
         stream->client = NULL;
 
@@ -92,9 +66,6 @@ void frame_stream_clear_client(
 }
 
 
-/*
- * Send one camera frame.
- */
 int frame_stream_send(
     FrameStream *stream,
     const Frame *frame)
@@ -111,20 +82,11 @@ int frame_stream_send(
         return -1;
     }
 
-    /*
-     * Construct frame metadata.
-     */
     FramePacketHeader header;
 
     memset(&header, 0, sizeof(header));
 
-    /*
-     * "FRAM" in hexadecimal.
-     *
-     * Used to identify our frame packet.
-     */
-    header.magic = 0x4652414D;
-
+    header.magic = FRAME_PACKET_MAGIC;
     header.width = frame->width;
     header.height = frame->height;
     header.pixel_format = frame->pixel_format;
@@ -133,32 +95,41 @@ int frame_stream_send(
     header.sequence = frame->sequence;
 
     /*
-     * Send metadata first.
+     * One WebSocket binary message:
+     *
+     * [FramePacketHeader][Frame data]
      */
+
+    size_t packet_size = sizeof(header) + frame->size;
+
+    unsigned char *packet = malloc(packet_size);
+
+    if (packet == NULL) {
+        fprintf(stderr, "Failed to allocate frame packet\n");
+        return -1;
+    }
+
+    memcpy(packet, &header, sizeof(header));
+
+    memcpy(
+        packet + sizeof(header),
+        frame->data,
+        frame->size
+    );
+
     mg_ws_send(
         stream->client,
-        &header,
-        sizeof(header),
+        packet,
+        packet_size,
         WEBSOCKET_OP_BINARY
     );
 
-    /*
-     * Send the actual camera buffer.
-     */
-    mg_ws_send(
-        stream->client,
-        frame->data,
-        frame->size,
-        WEBSOCKET_OP_BINARY
-    );
+    free(packet);
 
     return 0;
 }
 
 
-/*
- * Destroy frame stream.
- */
 void frame_stream_destroy(
     FrameStream *stream)
 {
