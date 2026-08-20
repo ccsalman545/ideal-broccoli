@@ -1,17 +1,34 @@
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
+#include "http_server.h"
+#include "mongoose.h"
+#include "camera_v4l2.h"
+#include "camera_worker.h"
+#include "frame_queue.h"
+#include "frame_stream.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 
-#include "mongoose.h"
-#include "http_server.h"
-#include "frame_stream.h"
+#define CAMERA_DEVICE "/dev/video0"
+#define CAMERA_WIDTH  640
+#define CAMERA_HEIGHT 480
+#define CAMERA_FPS    30
+
+#define FRAME_QUEUE_CAPACITY 3
 
 struct HttpServer {
     struct mg_mgr mgr;
     struct mg_connection *listener;
 
+    Camera *camera;
+    CameraWorker *worker;
+
+    FrameQueue *queue;
     FrameStream *frame_stream;
 
     bool running;
@@ -19,22 +36,361 @@ struct HttpServer {
 
 
 /*
- * HTTP + WebSocket event handler.
+ * Web interface.
+ *
+ * The browser receives YUYV frames through WebSocket.
+ * JavaScript converts YUYV to RGB and displays it on canvas.
+ */
+static const char HTML_PAGE[] =
+    "<!doctype html>"
+    "<html>"
+    "<head>"
+    "<meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>Camera Server</title>"
+    "<style>"
+    "body{"
+    "margin:0;"
+    "padding:20px;"
+    "background:#111;"
+    "color:#eee;"
+    "font-family:Arial,sans-serif;"
+    "}"
+    ".box{max-width:850px;margin:auto;}"
+    "h1{margin-top:0;}"
+    ".status{"
+    "background:#222;"
+    "padding:15px;"
+    "border-radius:8px;"
+    "margin-bottom:15px;"
+    "}"
+    "#video{"
+    "display:block;"
+    "width:100%;"
+    "max-width:640px;"
+    "height:auto;"
+    "background:#000;"
+    "border-radius:8px;"
+    "margin-bottom:15px;"
+    "}"
+    "button{"
+    "padding:12px 20px;"
+    "font-size:16px;"
+    "border:0;"
+    "border-radius:6px;"
+    "cursor:pointer;"
+    "}"
+    "#connect{background:#1683ff;color:white;}"
+    "#connect.disconnect{background:#d33;}"
+    "</style>"
+    "</head>"
+
+    "<body>"
+    "<div class=\"box\">"
+
+    "<h1>Camera Server</h1>"
+
+    "<div class=\"status\">"
+    "<div>HTTP: <b>Online</b></div>"
+    "<div id=\"wsstatus\">WebSocket: Disconnected</div>"
+    "<div id=\"frames\">Frames: 0</div>"
+    "<div id=\"fps\">FPS: 0</div>"
+    "</div>"
+
+    "<canvas id=\"video\" width=\"640\" height=\"480\"></canvas>"
+
+    "<button id=\"connect\">Connect WebSocket</button>"
+
+    "</div>"
+
+    "<script>"
+
+    "const canvas=document.getElementById('video');"
+    "const ctx=canvas.getContext('2d');"
+    "const button=document.getElementById('connect');"
+    "const status=document.getElementById('wsstatus');"
+    "const framesLabel=document.getElementById('frames');"
+    "const fpsLabel=document.getElementById('fps');"
+
+    "let ws=null;"
+    "let frameCount=0;"
+    "let fpsFrames=0;"
+    "let fpsTime=performance.now();"
+
+    /*
+     * Convert YUYV 4:2:2 to RGB.
+     */
+    "function yuyvToRgb(data,width,height){"
+
+        "const image=ctx.createImageData(width,height);"
+        "const out=image.data;"
+        "let di=0;"
+
+        "for(let i=0;i+3<data.length;i+=4){"
+
+            "const y0=data[i];"
+            "const u=data[i+1];"
+            "const y1=data[i+2];"
+            "const v=data[i+3];"
+
+            "let c=y0-16;"
+            "let d=u-128;"
+            "let e=v-128;"
+
+            "let r=(298*c+409*e+128)>>8;"
+            "let g=(298*c-100*d-208*e+128)>>8;"
+            "let b=(298*c+516*d+128)>>8;"
+
+            "r=Math.max(0,Math.min(255,r));"
+            "g=Math.max(0,Math.min(255,g));"
+            "b=Math.max(0,Math.min(255,b));"
+
+            "out[di++]=r;"
+            "out[di++]=g;"
+            "out[di++]=b;"
+            "out[di++]=255;"
+
+            "c=y1-16;"
+
+            "r=(298*c+409*e+128)>>8;"
+            "g=(298*c-100*d-208*e+128)>>8;"
+            "b=(298*c+516*d+128)>>8;"
+
+            "r=Math.max(0,Math.min(255,r));"
+            "g=Math.max(0,Math.min(255,g));"
+            "b=Math.max(0,Math.min(255,b));"
+
+            "out[di++]=r;"
+            "out[di++]=g;"
+            "out[di++]=b;"
+            "out[di++]=255;"
+        "}"
+
+        "ctx.putImageData(image,0,0);"
+    "}"
+
+    /*
+     * Process one binary camera packet.
+     *
+     * Packet:
+     *
+     * 0  - 3   magic
+     * 4  - 7   width
+     * 8  - 11  height
+     * 12 - 15  pixel format
+     * 16 - 19  stride
+     * 20 - 23  frame size
+     * 24 - 27  sequence
+     * 28 ...   YUYV
+     */
+    "function processFrame(buffer){"
+
+        "if(buffer.byteLength<28){"
+            "console.log('Packet too small');"
+            "return;"
+        "}"
+
+        "const view=new DataView(buffer);"
+
+        "const magic=view.getUint32(0,true);"
+
+        "if(magic!==0x4652414d){"
+            "console.log('Invalid frame magic:',magic.toString(16));"
+            "return;"
+        "}"
+
+        "const width=view.getUint32(4,true);"
+        "const height=view.getUint32(8,true);"
+        "const frameSize=view.getUint32(20,true);"
+        "const sequence=view.getUint32(24,true);"
+
+        "if(28+frameSize>buffer.byteLength){"
+            "console.log('Invalid frame size');"
+            "return;"
+        "}"
+
+        "if(frameSize<width*height*2){"
+            "console.log('Incomplete YUYV frame');"
+            "return;"
+        "}"
+
+        "if(canvas.width!==width||canvas.height!==height){"
+            "canvas.width=width;"
+            "canvas.height=height;"
+        "}"
+
+        "const yuyv=new Uint8Array(buffer,28,frameSize);"
+
+        "yuyvToRgb(yuyv,width,height);"
+
+        "frameCount++;"
+        "fpsFrames++;"
+
+        "framesLabel.textContent="
+            "'Frames: '+frameCount+' | Sequence: '+sequence;"
+
+        "const now=performance.now();"
+
+        "if(now-fpsTime>=1000){"
+
+            "const fps=fpsFrames*1000/(now-fpsTime);"
+
+            "fpsLabel.textContent='FPS: '+fps.toFixed(1);"
+
+            "fpsFrames=0;"
+            "fpsTime=now;"
+        "}"
+    "}"
+
+    /*
+     * WebSocket connection.
+     */
+    "function connectWebSocket(){"
+
+        "if(ws&&ws.readyState===WebSocket.OPEN){"
+            "ws.close();"
+            "return;"
+        "}"
+
+        "const protocol="
+            "(location.protocol==='https:'?'wss://':'ws://');"
+
+        "const url=protocol+location.host+'/ws';"
+
+        "console.log('Connecting to '+url);"
+
+        "status.textContent='WebSocket: Connecting...';"
+
+        "ws=new WebSocket(url);"
+
+        "ws.binaryType='arraybuffer';"
+
+        "ws.onopen=function(){"
+
+            "console.log('WebSocket connected');"
+
+            "status.textContent='WebSocket: Connected';"
+
+            "button.textContent='Disconnect WebSocket';"
+
+            "button.classList.add('disconnect');"
+        "};"
+
+        "ws.onmessage=function(event){"
+
+            "if(event.data instanceof ArrayBuffer){"
+
+                "processFrame(event.data);"
+
+            "}"
+        "};"
+
+        "ws.onerror=function(error){"
+
+            "console.error('WebSocket error',error);"
+
+            "status.textContent='WebSocket: Error';"
+        "};"
+
+        "ws.onclose=function(){"
+
+            "console.log('WebSocket closed');"
+
+            "status.textContent='WebSocket: Disconnected';"
+
+            "button.textContent='Connect WebSocket';"
+
+            "button.classList.remove('disconnect');"
+
+            "ws=null;"
+        "};"
+    "}"
+
+    "button.onclick=connectWebSocket;"
+
+    "</script>"
+    "</body>"
+    "</html>";
+
+
+/*
+ * Send available camera frames to WebSocket client.
+ */
+static void http_send_frames(HttpServer *server)
+{
+    if (server == NULL) {
+        return;
+    }
+
+    if (server->frame_stream == NULL) {
+        return;
+    }
+
+    if (server->queue == NULL) {
+        return;
+    }
+
+    /*
+     * Drain all currently available frames.
+     */
+    for (;;) {
+
+        Frame frame;
+
+        memset(&frame, 0, sizeof(frame));
+
+        int result =
+            frame_queue_pop(
+                server->queue,
+                &frame
+            );
+
+        if (result <= 0) {
+            break;
+        }
+
+        /*
+         * Send:
+         *
+         * [28-byte packet header]
+         * [YUYV frame]
+         */
+        frame_stream_send(
+            server->frame_stream,
+            &frame
+        );
+
+        /*
+         * frame_queue_pop() gives ownership
+         * of frame.data to us.
+         */
+        free(frame.data);
+
+        frame.data = NULL;
+    }
+}
+
+
+/*
+ * HTTP/WebSocket event handler.
  */
 static void http_event_handler(
     struct mg_connection *c,
     int ev,
-    void *ev_data)
+    void *ev_data
+)
 {
     HttpServer *server =
         (HttpServer *) c->fn_data;
 
+    if (server == NULL) {
+        return;
+    }
+
     switch (ev) {
 
-    /*
-     * HTTP request received.
-     */
     case MG_EV_HTTP_MSG: {
+
         struct mg_http_message *hm =
             (struct mg_http_message *) ev_data;
 
@@ -44,7 +400,12 @@ static void http_event_handler(
         if (mg_match(
                 hm->uri,
                 mg_str("/ws"),
-                NULL)) {
+                NULL
+            )) {
+
+            printf(
+                "WebSocket upgrade requested\n"
+            );
 
             mg_ws_upgrade(
                 c,
@@ -56,37 +417,53 @@ static void http_event_handler(
         }
 
         /*
-         * Main HTTP status page.
+         * Main web page.
          */
         if (mg_match(
                 hm->uri,
                 mg_str("/"),
-                NULL)) {
+                NULL
+            )) {
 
             mg_http_reply(
                 c,
                 200,
-                "Content-Type: text/html\r\n",
-                "<!DOCTYPE html>"
-                "<html>"
-                "<head>"
-                "<meta charset=\"UTF-8\">"
-                "<title>Camera Server</title>"
-                "</head>"
-                "<body>"
-                "<h1>Camera Server</h1>"
-                "<p>HTTP server is running.</p>"
-                "<p>WebSocket endpoint: /ws</p>"
-                "<p>Camera frame streaming is enabled.</p>"
-                "</body>"
-                "</html>"
+                "Content-Type: text/html; charset=utf-8\r\n",
+                "%s",
+                HTML_PAGE
             );
 
             return;
         }
 
         /*
-         * Unknown HTTP path.
+         * Simple status endpoint.
+         */
+        if (mg_match(
+                hm->uri,
+                mg_str("/status"),
+                NULL
+            )) {
+
+            mg_http_reply(
+                c,
+                200,
+                "Content-Type: application/json\r\n",
+                "{"
+                "\"status\":\"online\","
+                "\"camera\":\"/dev/video0\","
+                "\"format\":\"YUYV\","
+                "\"width\":640,"
+                "\"height\":480,"
+                "\"fps\":30"
+                "}"
+            );
+
+            return;
+        }
+
+        /*
+         * Unknown path.
          */
         mg_http_reply(
             c,
@@ -100,42 +477,35 @@ static void http_event_handler(
 
 
     /*
-     * WebSocket connection established.
+     * WebSocket connection opened.
      */
-    case MG_EV_WS_OPEN: {
+    case MG_EV_WS_OPEN:
 
         printf(
             "WebSocket client connected\n"
         );
 
-        /*
-         * Register this connection as
-         * the current frame-stream client.
-         */
-        if (server != NULL &&
-            server->frame_stream != NULL) {
+        frame_stream_set_client(
+            server->frame_stream,
+            c
+        );
 
-            frame_stream_set_client(
-                server->frame_stream,
-                c
+        /*
+         * Send a small text confirmation.
+         */
+        {
+            const char *message =
+                "Camera WebSocket connected";
+
+            mg_ws_send(
+                c,
+                message,
+                strlen(message),
+                WEBSOCKET_OP_TEXT
             );
         }
 
-        /*
-         * Send connection confirmation.
-         */
-        const char *message =
-            "Camera server WebSocket connected";
-
-        mg_ws_send(
-            c,
-            message,
-            strlen(message),
-            WEBSOCKET_OP_TEXT
-        );
-
         break;
-    }
 
 
     /*
@@ -147,16 +517,15 @@ static void http_event_handler(
             (struct mg_ws_message *) ev_data;
 
         printf(
-            "WebSocket message received: %.*s\n",
-            (int) wm->data.len,
-            wm->data.buf
+            "WebSocket message received: %zu bytes\n",
+            wm->data.len
         );
 
         /*
-         * Echo the received message.
+         * Echo text messages.
          *
-         * This is currently used as a basic
-         * communication test.
+         * Camera frames are sent independently
+         * as binary WebSocket messages.
          */
         mg_ws_send(
             c,
@@ -172,27 +541,18 @@ static void http_event_handler(
     /*
      * Connection closed.
      */
-    case MG_EV_CLOSE: {
+    case MG_EV_CLOSE:
 
         printf(
             "Client connection closed\n"
         );
 
-        /*
-         * Remove the connection from the
-         * frame streaming context.
-         */
-        if (server != NULL &&
-            server->frame_stream != NULL) {
-
-            frame_stream_clear_client(
-                server->frame_stream,
-                c
-            );
-        }
+        frame_stream_clear_client(
+            server->frame_stream,
+            c
+        );
 
         break;
-    }
 
 
     default:
@@ -202,42 +562,51 @@ static void http_event_handler(
 
 
 /*
- * Start the HTTP/WebSocket server.
+ * Start HTTP/WebSocket server and camera pipeline.
  */
 HttpServer *http_server_start(
     const char *listen_address,
-    uint16_t port)
+    uint16_t port
+)
 {
-    HttpServer *server =
-        calloc(1, sizeof(*server));
-
-    if (server == NULL) {
+    if (listen_address == NULL || port == 0) {
         fprintf(
             stderr,
-            "Failed to allocate HttpServer\n"
+            "Invalid HTTP server configuration\n"
         );
 
         return NULL;
     }
 
+    HttpServer *server =
+        calloc(1, sizeof(*server));
+
+    if (server == NULL) {
+        perror("calloc");
+        return NULL;
+    }
+
     /*
-     * Initialize Mongoose manager.
+     * Initialize Mongoose.
      */
     mg_mgr_init(
         &server->mgr
     );
 
-    /*
-     * Create frame-stream context.
-     */
-    server->frame_stream =
-        frame_stream_create();
 
-    if (server->frame_stream == NULL) {
+    /*
+     * Create frame queue.
+     */
+    server->queue =
+        frame_queue_create(
+            FRAME_QUEUE_CAPACITY
+        );
+
+    if (server->queue == NULL) {
 
         fprintf(
             stderr,
-            "Failed to create FrameStream\n"
+            "Failed to create frame queue\n"
         );
 
         mg_mgr_free(
@@ -249,39 +618,203 @@ HttpServer *http_server_start(
         return NULL;
     }
 
+
     /*
-     * Construct listen address.
-     *
-     * Example:
-     *
-     * 192.168.1.10:8080
+     * Create WebSocket frame stream.
      */
-    char address[64];
+    server->frame_stream =
+        frame_stream_create();
+
+    if (server->frame_stream == NULL) {
+
+        frame_queue_destroy(
+            server->queue
+        );
+
+        mg_mgr_free(
+            &server->mgr
+        );
+
+        free(server);
+
+        return NULL;
+    }
+
+
+    /*
+     * Open camera.
+     */
+    server->camera =
+        camera_open(
+            CAMERA_DEVICE,
+            CAMERA_WIDTH,
+            CAMERA_HEIGHT,
+            CAMERA_FPS
+        );
+
+    if (server->camera == NULL) {
+
+        fprintf(
+            stderr,
+            "Failed to open camera %s\n",
+            CAMERA_DEVICE
+        );
+
+        frame_stream_destroy(
+            server->frame_stream
+        );
+
+        frame_queue_destroy(
+            server->queue
+        );
+
+        mg_mgr_free(
+            &server->mgr
+        );
+
+        free(server);
+
+        return NULL;
+    }
+
+
+    /*
+     * Start V4L2 streaming.
+     */
+    if (camera_start(
+            server->camera
+        ) != 0) {
+
+        fprintf(
+            stderr,
+            "Failed to start camera streaming\n"
+        );
+
+        camera_close(
+            server->camera
+        );
+
+        frame_stream_destroy(
+            server->frame_stream
+        );
+
+        frame_queue_destroy(
+            server->queue
+        );
+
+        mg_mgr_free(
+            &server->mgr
+        );
+
+        free(server);
+
+        return NULL;
+    }
+
+
+    /*
+     * Create camera worker.
+     */
+    server->worker =
+        camera_worker_create(
+            server->camera,
+            server->queue
+        );
+
+    if (server->worker == NULL) {
+
+        fprintf(
+            stderr,
+            "Failed to create camera worker\n"
+        );
+
+        camera_close(
+            server->camera
+        );
+
+        frame_stream_destroy(
+            server->frame_stream
+        );
+
+        frame_queue_destroy(
+            server->queue
+        );
+
+        mg_mgr_free(
+            &server->mgr
+        );
+
+        free(server);
+
+        return NULL;
+    }
+
+
+    /*
+     * Start camera worker thread.
+     */
+    if (camera_worker_start(
+            server->worker
+        ) != 0) {
+
+        fprintf(
+            stderr,
+            "Failed to start camera worker\n"
+        );
+
+        camera_worker_destroy(
+            server->worker
+        );
+
+        camera_close(
+            server->camera
+        );
+
+        frame_stream_destroy(
+            server->frame_stream
+        );
+
+        frame_queue_destroy(
+            server->queue
+        );
+
+        mg_mgr_free(
+            &server->mgr
+        );
+
+        free(server);
+
+        return NULL;
+    }
+
+
+    /*
+     * Build Mongoose URL.
+     */
+    char url[128];
 
     snprintf(
-        address,
-        sizeof(address),
-        "%s:%u",
+        url,
+        sizeof(url),
+        "http://%s:%u",
         listen_address,
         (unsigned int) port
     );
 
+
     printf(
         "Starting HTTP server on %s\n",
-        address
+        url
     );
 
+
     /*
-     * Start Mongoose HTTP listener.
-     *
-     * The HttpServer pointer is stored in
-     * c->fn_data and retrieved by the
-     * event handler.
+     * Start HTTP listener.
      */
     server->listener =
         mg_http_listen(
             &server->mgr,
-            address,
+            url,
             http_event_handler,
             server
         );
@@ -290,12 +823,23 @@ HttpServer *http_server_start(
 
         fprintf(
             stderr,
-            "Failed to start HTTP server on %s\n",
-            address
+            "Failed to start HTTP server\n"
+        );
+
+        camera_worker_destroy(
+            server->worker
+        );
+
+        camera_close(
+            server->camera
         );
 
         frame_stream_destroy(
             server->frame_stream
+        );
+
+        frame_queue_destroy(
+            server->queue
         );
 
         mg_mgr_free(
@@ -307,24 +851,36 @@ HttpServer *http_server_start(
         return NULL;
     }
 
+
     server->running = true;
+
 
     printf(
         "HTTP server started successfully\n"
     );
 
     printf(
-        "HTTP endpoint: http://%s/\n",
-        address
+        "HTTP endpoint: http://%s:%u/\n",
+        listen_address,
+        (unsigned int) port
     );
 
     printf(
-        "WebSocket endpoint: ws://%s/ws\n",
-        address
+        "WebSocket endpoint: ws://%s:%u/ws\n",
+        listen_address,
+        (unsigned int) port
     );
 
     printf(
-        "Press Ctrl+C to stop the server.\n"
+        "Camera: %s\n",
+        CAMERA_DEVICE
+    );
+
+    printf(
+        "Camera format: %ux%u YUYV @ %u FPS\n",
+        CAMERA_WIDTH,
+        CAMERA_HEIGHT,
+        CAMERA_FPS
     );
 
     return server;
@@ -332,36 +888,11 @@ HttpServer *http_server_start(
 
 
 /*
- * Process Mongoose events once.
- *
- * This function is useful when the camera
- * capture loop needs to run alongside the
- * HTTP/WebSocket event loop.
- */
-void http_server_poll(
-    HttpServer *server,
-    int timeout_ms)
-{
-    if (server == NULL) {
-        return;
-    }
-
-    if (!server->running) {
-        return;
-    }
-
-    mg_mgr_poll(
-        &server->mgr,
-        timeout_ms
-    );
-}
-
-
-/*
- * Run the Mongoose event loop continuously.
+ * Run HTTP event loop.
  */
 void http_server_run(
-    HttpServer *server)
+    HttpServer *server
+)
 {
     if (server == NULL) {
         return;
@@ -373,50 +904,30 @@ void http_server_run(
 
     while (server->running) {
 
+        /*
+         * Process network events.
+         */
         mg_mgr_poll(
             &server->mgr,
-            1000
+            10
+        );
+
+        /*
+         * Send queued camera frames.
+         */
+        http_send_frames(
+            server
         );
     }
-
-    printf(
-        "HTTP server event loop stopped\n"
-    );
 }
 
 
 /*
- * Send a camera frame through the
- * currently connected WebSocket client.
- */
-int http_server_send_frame(
-    HttpServer *server,
-    const Frame *frame)
-{
-    if (server == NULL) {
-        return -1;
-    }
-
-    if (server->frame_stream == NULL) {
-        return -1;
-    }
-
-    if (frame == NULL) {
-        return -1;
-    }
-
-    return frame_stream_send(
-        server->frame_stream,
-        frame
-    );
-}
-
-
-/*
- * Stop the server.
+ * Stop server.
  */
 void http_server_stop(
-    HttpServer *server)
+    HttpServer *server
+)
 {
     if (server == NULL) {
         return;
@@ -427,10 +938,11 @@ void http_server_stop(
 
 
 /*
- * Destroy the server and release resources.
+ * Destroy server.
  */
 void http_server_destroy(
-    HttpServer *server)
+    HttpServer *server
+)
 {
     if (server == NULL) {
         return;
@@ -438,8 +950,48 @@ void http_server_destroy(
 
     server->running = false;
 
+
     /*
-     * Destroy frame streaming context.
+     * Stop and destroy camera worker.
+     */
+    if (server->worker != NULL) {
+
+        camera_worker_destroy(
+            server->worker
+        );
+
+        server->worker = NULL;
+    }
+
+
+    /*
+     * Close camera.
+     */
+    if (server->camera != NULL) {
+
+        camera_close(
+            server->camera
+        );
+
+        server->camera = NULL;
+    }
+
+
+    /*
+     * Destroy frame queue.
+     */
+    if (server->queue != NULL) {
+
+        frame_queue_destroy(
+            server->queue
+        );
+
+        server->queue = NULL;
+    }
+
+
+    /*
+     * Destroy frame stream.
      */
     if (server->frame_stream != NULL) {
 
@@ -450,16 +1002,13 @@ void http_server_destroy(
         server->frame_stream = NULL;
     }
 
+
     /*
-     * Release Mongoose resources.
+     * Free Mongoose.
      */
     mg_mgr_free(
         &server->mgr
     );
 
     free(server);
-
-    printf(
-        "HTTP server destroyed\n"
-    );
 }

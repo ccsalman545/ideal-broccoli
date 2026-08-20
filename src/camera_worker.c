@@ -31,35 +31,55 @@ static void *camera_worker_thread(void *arg)
             &frame
         );
 
-        if (result != 0) {
-            fprintf(stderr,
-                    "camera_capture() failed\n");
+        /*
+         * camera_capture():
+         *
+         *   1  = frame captured successfully
+         *   0  = no frame / interrupted
+         *  -1  = error
+         */
+        if (result <= 0) {
+
+            if (result < 0) {
+                fprintf(
+                    stderr,
+                    "camera_capture() failed\n"
+                );
+            }
 
             /*
              * Avoid a tight error loop.
              */
             usleep(10000);
+
             continue;
         }
 
         /*
-         * Copy the camera frame into the queue.
+         * Successful frame.
          *
-         * The queue owns its copy.
+         * frame.data points directly to a V4L2
+         * MMAP buffer, so frame_queue_push()
+         * must copy the image before we release
+         * the V4L2 buffer.
          */
         if (frame_queue_push(
                 worker->queue,
-                &frame) != 0) {
+                &frame
+            ) != 0) {
 
-            fprintf(stderr,
-                    "Frame queue full; dropping frame %llu\n",
-                    (unsigned long long) frame.sequence);
+            fprintf(
+                stderr,
+                "Frame queue full; dropping frame %llu\n",
+                (unsigned long long) frame.sequence
+            );
         }
 
         /*
-         * The queue has copied the image,
-         * therefore the V4L2 buffer can now
-         * be returned to the camera driver.
+         * The queue now owns its own copy.
+         *
+         * Return the original V4L2 MMAP buffer
+         * back to the camera driver.
          */
         camera_release_frame(
             worker->camera,
@@ -121,8 +141,11 @@ int camera_worker_start(
     );
 
     if (result != 0) {
-        fprintf(stderr,
-                "Failed to create camera worker thread\n");
+
+        fprintf(
+            stderr,
+            "Failed to create camera worker thread\n"
+        );
 
         worker->running = false;
 
@@ -174,3 +197,4 @@ void camera_worker_destroy(
 
     free(worker);
 }
+
