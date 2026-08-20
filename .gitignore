@@ -1,0 +1,17 @@
+# Build output
+build/
+
+# Old prototype binaries
+camera_capture
+camera_sender
+
+# Raw camera data
+*.yuyv
+
+# Temporary files
+*.tmp
+*.log
+
+# Editor/system files
+*~
+.DS_Store
