@@ -1,8 +1,6 @@
 #ifndef FRAME_STREAM_H
 #define FRAME_STREAM_H
 
-#include <stddef.h>
-
 #include "frame.h"
 
 struct mg_connection;
@@ -15,10 +13,10 @@ typedef struct FrameStream FrameStream;
 FrameStream *frame_stream_create(void);
 
 /*
- * Set the currently connected WebSocket client.
+ * Attach the currently connected WebSocket client.
  *
  * The connection is owned by Mongoose.
- * FrameStream only stores the pointer.
+ * FrameStream stores only a non-owning pointer.
  */
 void frame_stream_set_client(
     FrameStream *stream,
@@ -26,7 +24,7 @@ void frame_stream_set_client(
 );
 
 /*
- * Remove the currently connected WebSocket client.
+ * Detach the WebSocket client.
  */
 void frame_stream_clear_client(
     FrameStream *stream,
@@ -34,11 +32,18 @@ void frame_stream_clear_client(
 );
 
 /*
- * Send one camera frame through WebSocket.
+ * Send one Frame as one WebSocket binary message.
+ *
+ * Packet format:
+ *
+ * +----------------------+------------------+
+ * | FramePacketHeader    | Camera frame     |
+ * | 28 bytes             | frame->size      |
+ * +----------------------+------------------+
  *
  * Returns:
  *   0  success
- *  -1  no client or transmission failure
+ *  -1 failure / no client
  */
 int frame_stream_send(
     FrameStream *stream,
@@ -46,9 +51,10 @@ int frame_stream_send(
 );
 
 /*
- * Destroy the streaming context.
+ * Destroy the frame-stream context.
  */
 void frame_stream_destroy(
     FrameStream *stream
 );
+
 #endif
