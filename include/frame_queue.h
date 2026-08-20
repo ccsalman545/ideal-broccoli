@@ -10,21 +10,18 @@ typedef struct FrameQueue FrameQueue;
 /*
  * Create a frame queue.
  *
- * capacity:
- *   Maximum number of queued frames.
+ * Each queued frame owns its copied image buffer.
  */
 FrameQueue *frame_queue_create(size_t capacity);
 
 /*
- * Push a frame into the queue.
+ * Copy a frame into the queue.
  *
- * The queue does not take ownership of frame->data.
- * The caller must keep the underlying buffer valid
- * until the frame has been consumed.
+ * The queue makes its own copy of frame->data.
  *
  * Returns:
  *   0  success
- *  -1 queue full or invalid argument
+ *  -1 failure or queue full
  */
 int frame_queue_push(
     FrameQueue *queue,
@@ -32,7 +29,10 @@ int frame_queue_push(
 );
 
 /*
- * Pop the oldest frame from the queue.
+ * Remove the oldest frame.
+ *
+ * The returned Frame owns its data buffer.
+ * The caller must eventually free(frame->data).
  *
  * Returns:
  *   1  frame returned
@@ -45,14 +45,14 @@ int frame_queue_pop(
 );
 
 /*
- * Return the number of queued frames.
+ * Number of queued frames.
  */
 size_t frame_queue_size(
     const FrameQueue *queue
 );
 
 /*
- * Clear all queued entries.
+ * Remove and free all queued frame data.
  */
 void frame_queue_clear(
     FrameQueue *queue

@@ -16,7 +16,8 @@ struct FrameQueue {
 FrameQueue *frame_queue_create(size_t capacity)
 {
     if (capacity == 0) {
-        fprintf(stderr, "Frame queue capacity must be greater than zero\n");
+        fprintf(stderr,
+                "Frame queue capacity must be greater than zero\n");
         return NULL;
     }
 
@@ -52,12 +53,50 @@ int frame_queue_push(
         return -1;
     }
 
+    if (frame->data == NULL || frame->size == 0) {
+        return -1;
+    }
+
+    /*
+     * Queue is full.
+     */
     if (queue->count >= queue->capacity) {
         return -1;
     }
 
-    queue->frames[queue->tail] = *frame;
+    /*
+     * Copy Frame metadata.
+     */
+    Frame *destination = &queue->frames[queue->tail];
 
+    *destination = *frame;
+
+    /*
+     * Allocate independent storage for the image.
+     */
+    destination->data = malloc(frame->size);
+
+    if (destination->data == NULL) {
+        fprintf(stderr,
+                "Failed to allocate frame queue buffer\n");
+
+        memset(destination, 0, sizeof(*destination));
+
+        return -1;
+    }
+
+    /*
+     * Copy the camera image.
+     */
+    memcpy(
+        destination->data,
+        frame->data,
+        frame->size
+    );
+
+    /*
+     * Advance circular queue tail.
+     */
     queue->tail++;
 
     if (queue->tail >= queue->capacity) {
@@ -82,8 +121,25 @@ int frame_queue_pop(
         return 0;
     }
 
+    /*
+     * Transfer ownership of the stored Frame
+     * to the caller.
+     */
     *frame = queue->frames[queue->head];
 
+    /*
+     * Clear the queue slot so it no longer owns
+     * the returned buffer.
+     */
+    memset(
+        &queue->frames[queue->head],
+        0,
+        sizeof(queue->frames[queue->head])
+    );
+
+    /*
+     * Advance circular queue head.
+     */
     queue->head++;
 
     if (queue->head >= queue->capacity) {
@@ -114,15 +170,17 @@ void frame_queue_clear(
         return;
     }
 
+    /*
+     * Free every queued image buffer.
+     */
+    for (size_t i = 0; i < queue->capacity; i++) {
+        free(queue->frames[i].data);
+        queue->frames[i].data = NULL;
+    }
+
     queue->head = 0;
     queue->tail = 0;
     queue->count = 0;
-
-    memset(
-        queue->frames,
-        0,
-        queue->capacity * sizeof(*queue->frames)
-    );
 }
 
 
@@ -133,6 +191,9 @@ void frame_queue_destroy(
         return;
     }
 
+    frame_queue_clear(queue);
+
     free(queue->frames);
     free(queue);
 }
+
