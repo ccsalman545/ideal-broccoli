@@ -1,4 +1,4 @@
-# Stage 04 — HTTP and WebSocket Communication
+# Stage 04 - HTTP and WebSocket Communication
 
 ## Objective
 

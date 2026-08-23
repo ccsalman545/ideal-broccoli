@@ -1,56 +1,168 @@
-CC = gcc
+#
+# camstream build
+#
+# Primary target : build/camstream  (WebRTC server, default)
+# Legacy target  : build/http_server (stage 4 WebSocket prototype)
+#
+# Dependency overrides (all optional when system packages are
+# installed):
+#
+#   make OPENSSL_DIR=/path SRTP_DIR=/path X264_DIR=/path HAVE_X264=1
+#
+# System packages on Debian, Ubuntu and Raspberry Pi OS:
+#   sudo apt install build-essential libssl-dev libsrtp2-dev libx264-dev
+# Fedora:
+#   sudo dnf install gcc make openssl-devel libsrtp-devel x264-devel
+#
 
-CFLAGS = -Iinclude -Ithird_party/mongoose \
-	-std=c11 \
-	-D_DEFAULT_SOURCE \
-	-D_POSIX_C_SOURCE=200809L \
-	-Wall -Wextra -Wpedantic \
-	-O2
-
-LDFLAGS = -pthread
+CC      ?= gcc
+CFLAGS  ?= -O2
+WARN     = -Wall -Wextra -Wpedantic
+BASE    = -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L
 
 BUILD_DIR = build
 
-HTTP_SOURCES = \
-	src/http_main.c \
-	src/http_server.c \
-	src/frame_stream.c \
-	src/frame_queue.c \
-	src/camera_v4l2.c \
-	src/camera_worker.c
+# Optional dependency prefixes -----------------------------------------
 
-HTTP_OBJECTS = \
-	$(BUILD_DIR)/src/http_main.o \
-	$(BUILD_DIR)/src/http_server.o \
-	$(BUILD_DIR)/src/frame_stream.o \
-	$(BUILD_DIR)/src/frame_queue.o \
-	$(BUILD_DIR)/src/camera_v4l2.o \
-	$(BUILD_DIR)/src/camera_worker.o \
-	$(BUILD_DIR)/third_party/mongoose/mongoose.o
+OPENSSL_DIR ?=
+SRTP_DIR    ?=
+X264_DIR    ?=
 
+DEP_INCLUDES =
+DEP_LIBDIRS  =
 
-.PHONY: all http clean
+ifneq ($(OPENSSL_DIR),)
+  DEP_INCLUDES += -I$(OPENSSL_DIR)/include
+  DEP_LIBDIRS  += -L$(OPENSSL_DIR)/lib
+endif
 
-all: http
+ifneq ($(SRTP_DIR),)
+  DEP_INCLUDES += -I$(SRTP_DIR)/include
+  DEP_LIBDIRS  += -L$(SRTP_DIR)/lib
+endif
 
+ifneq ($(X264_DIR),)
+  DEP_INCLUDES += -I$(X264_DIR)/include
+  DEP_LIBDIRS  += -L$(X264_DIR)/lib
+endif
 
-http: $(BUILD_DIR)/http_server
+# libx264 autodetection --------------------------------------------------
 
+X264_CANDIDATES = $(X264_DIR)/include/x264.h /usr/include/x264.h \
+                  /usr/local/include/x264.h
 
-$(BUILD_DIR)/http_server: $(HTTP_OBJECTS)
+HAVE_X264 ?= $(firstword $(foreach f,$(X264_CANDIDATES),$(if $(wildcard $f),1,)))
+ifeq ($(HAVE_X264),)
+  HAVE_X264 = 0
+endif
+
+# Primary target: camstream ----------------------------------------------
+
+APP_INCLUDES = -Iinclude -Iinclude/app -Iinclude/media -Iinclude/webrtc \
+               -Ithird_party/mongoose $(DEP_INCLUDES)
+
+APP_CFLAGS = $(BASE) $(WARN) $(CFLAGS) $(APP_INCLUDES) \
+             -DHAVE_X264=$(HAVE_X264)
+
+APP_SOURCES = \
+	src/camstream_main.c \
+	src/app/app_server.c \
+	src/app/app_config.c \
+	src/app/web_ui.c \
+	src/media/frame_pool.c \
+	src/media/frame_hub.c \
+	src/media/au_ring.c \
+	src/media/source_worker.c \
+	src/media/encoder_worker.c \
+	src/media/v4l2_source.c \
+	src/media/test_source.c \
+	src/media/yuv_convert.c \
+	src/media/h264_encoder.c \
+	src/media/encoder_x264.c \
+	src/media/encoder_v4l2m2m.c \
+	src/webrtc/ice_lite.c \
+	src/webrtc/dtls_srtp.c \
+	src/webrtc/rtp_h264.c \
+	src/webrtc/rtcp.c \
+	src/webrtc/sdp.c \
+	src/webrtc/webrtc_session.c \
+	third_party/mongoose/mongoose.c
+
+APP_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(APP_SOURCES))
+
+# libm last: x264 math symbols resolve from archives seen later
+X264_LIB =
+ifeq ($(HAVE_X264),1)
+  X264_LIB = -lx264
+endif
+
+APP_LIBS = $(DEP_LIBDIRS) -lssl -lcrypto -lsrtp2 -lpthread $(X264_LIB) -lm
+
+# Legacy target: stage 4 WebSocket prototype -----------------------------
+
+LEGACY_INCLUDES = -Iinclude/legacy -Ithird_party/mongoose
+
+LEGACY_CFLAGS = $(BASE) $(WARN) $(CFLAGS) $(LEGACY_INCLUDES)
+
+LEGACY_SOURCES = \
+	src/legacy/http_main.c \
+	src/legacy/http_server.c \
+	src/legacy/frame_stream.c \
+	src/legacy/frame_queue.c \
+	src/legacy/camera_v4l2.c \
+	src/legacy/camera_worker.c \
+	third_party/mongoose/mongoose.c
+
+LEGACY_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(LEGACY_SOURCES))
+
+# Rules ------------------------------------------------------------------
+
+.PHONY: all camstream legacy clean help
+
+all: camstream
+
+camstream: $(BUILD_DIR)/camstream
+
+$(BUILD_DIR)/camstream: $(APP_OBJECTS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(HTTP_OBJECTS) -o $@ $(LDFLAGS)
+	$(CC) $(APP_CFLAGS) $(APP_OBJECTS) -o $@ $(APP_LIBS)
+	@echo ""
+	@echo "built $(BUILD_DIR)/camstream (x264: $(if $(filter 1,$(HAVE_X264)),yes,no))"
 
-
-$(BUILD_DIR)/src/%.o: src/%.c
+$(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(APP_CFLAGS) -c $< -o $@
 
+# The embedded web page is one long string literal, beyond the
+# 4095 byte ISO minimum, so pedantic mode is disabled for it.
+$(BUILD_DIR)/src/app/web_ui.o: src/app/web_ui.c
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE) $(filter-out -Wpedantic,$(WARN)) $(CFLAGS) $(APP_INCLUDES) \
+	       -DHAVE_X264=$(HAVE_X264) -c $< -o $@
 
 $(BUILD_DIR)/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -include alloca.h -c $< -o $@
+	$(CC) $(BASE) $(CFLAGS) -Ithird_party/mongoose -include alloca.h -c $< -o $@
 
+legacy: $(BUILD_DIR)/http_server
+
+$(BUILD_DIR)/http_server: $(LEGACY_OBJECTS)
+	@mkdir -p $(dir $@)
+	$(CC) $(LEGACY_CFLAGS) $(LEGACY_OBJECTS) -o $@ -pthread
+
+$(BUILD_DIR)/src/legacy/%.o: src/legacy/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(LEGACY_CFLAGS) -c $< -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+help:
+	@echo "targets:"
+	@echo "  make            build build/camstream (WebRTC server)"
+	@echo "  make legacy     build build/http_server (stage 4 prototype)"
+	@echo "  make clean      remove build/"
+	@echo ""
+	@echo "overrides:"
+	@echo "  OPENSSL_DIR=... SRTP_DIR=... X264_DIR=...  dependency prefixes"
+	@echo "  HAVE_X264=0/1                               force x264 on or off"
