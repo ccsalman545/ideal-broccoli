@@ -69,6 +69,9 @@ typedef struct {
     uint32_t nacks_received;
     uint32_t retransmissions;
     uint32_t rtcp_sent;
+    uint32_t stun_rx;           /* datagrams classified as STUN */
+    uint32_t stun_ok;           /* binding requests we answered */
+    uint32_t stun_bad_user;     /* USERNAME did not match local ufrag */
 } RtcSessionStats;
 
 /*

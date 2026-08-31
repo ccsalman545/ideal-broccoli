@@ -192,6 +192,7 @@ size_t sdp_build_answer(const SdpOffer *offer,
                         const char *local_pwd,
                         const char *advertise_ip,
                         uint16_t udp_port,
+                        uint32_t ssrc,
                         char *out,
                         size_t out_capacity)
 {
@@ -201,14 +202,26 @@ size_t sdp_build_answer(const SdpOffer *offer,
     char buffer[4096];
     size_t offset = 0;
 
+    /*
+     * a=ice-lite is a session-level attribute only (RFC 8839
+     * §5.4). Putting it only on the video m-line made some
+     * browsers treat us as a full ICE agent and wait for
+     * checks we never send.
+     */
     int written = snprintf(buffer + offset, sizeof(buffer) - offset,
         "v=0\r\n"
-        "o=- 0 0 IN IP4 %s\r\n"
+        "o=- 1 1 IN IP4 %s\r\n"
         "s=camstream\r\n"
         "t=0 0\r\n"
+        "a=ice-lite\r\n"
+        "a=ice-options:trickle\r\n"
         "a=group:BUNDLE %s\r\n"
-        "a=msid-semantic: WMS camstream\r\n",
-        advertise_ip, video_mid);
+        "a=msid-semantic: WMS camstream\r\n"
+        "a=fingerprint:%s\r\n"
+        "a=setup:passive\r\n"
+        "a=ice-ufrag:%s\r\n"
+        "a=ice-pwd:%s\r\n",
+        advertise_ip, video_mid, local_fingerprint, local_ufrag, local_pwd);
 
     if (written < 0) {
         return 0;
@@ -216,11 +229,13 @@ size_t sdp_build_answer(const SdpOffer *offer,
     offset += (size_t) written;
 
     /*
-     * Reject the audio section when the offer contains one.
+     * Reject unused audio with port 0 (JSEP §5.3.1). Port 9
+     * plus a=inactive is an accepted-but-inactive m-line and
+     * needs its own ICE transport when it is not in BUNDLE.
      */
     if (offer->has_audio) {
         written = snprintf(buffer + offset, sizeof(buffer) - offset,
-            "m=audio 9 UDP/TLS/RTP/SAVPF 0\r\n"
+            "m=audio 0 UDP/TLS/RTP/SAVPF 0\r\n"
             "c=IN IP4 0.0.0.0\r\n"
             "a=inactive\r\n"
             "a=mid:%s\r\n",
@@ -250,18 +265,21 @@ size_t sdp_build_answer(const SdpOffer *offer,
         "a=mid:%s\r\n"
         "a=ice-ufrag:%s\r\n"
         "a=ice-pwd:%s\r\n"
-        "a=ice-lite\r\n"
+        "a=ice-options:trickle\r\n"
         "a=fingerprint:%s\r\n"
         "a=setup:passive\r\n"
         "a=sendonly\r\n"
         "a=rtcp-mux\r\n"
+        "a=msid:camstream camstream-video\r\n"
+        "a=ssrc:%u cname:camstream\r\n"
+        "a=ssrc:%u msid:camstream camstream-video\r\n"
         "a=rtpmap:%d H264/90000\r\n"
         "a=fmtp:%d packetization-mode=1;profile-level-id=42e01f;"
             "level-asymmetry-allowed=1\r\n"
         "a=rtcp-fb:%d nack\r\n"
         "a=rtcp-fb:%d nack pli\r\n"
-        "a=rtcp-fb:%d fir\r\n"
-        "a=candidate:1 1 udp 2113667327 %s %u typ host generation 0\r\n"
+        "a=rtcp-fb:%d ccm fir\r\n"
+        "a=candidate:1 1 udp 2130706431 %s %u typ host generation 0\r\n"
         "a=end-of-candidates\r\n",
         offer->h264_payload_type,
         advertise_ip,
@@ -269,6 +287,8 @@ size_t sdp_build_answer(const SdpOffer *offer,
         local_ufrag,
         local_pwd,
         local_fingerprint,
+        ssrc,
+        ssrc,
         offer->h264_payload_type,
         offer->h264_payload_type,
         offer->h264_payload_type,

@@ -35,8 +35,8 @@ flowchart TB
 1. extracts `a=ice-ufrag`, `a=ice-pwd`, `a=fingerprint`
 2. finds the first `a=rtpmap:N H264/90000` payload type in the video section
 3. records `a=mid` values and whether audio exists
-4. builds the answer: audio rejected (port 9, inactive), video sendonly with
-   - `a=ice-lite`, fresh local ufrag/pwd
+4. builds the answer: audio rejected (port 0), video sendonly with
+   - session-level `a=ice-lite` (RFC 8839), fresh local ufrag/pwd
    - the DTLS SHA-256 fingerprint of a certificate generated at startup
    - `a=setup:passive` (the browser is the DTLS client)
    - `a=candidate:... typ host` pointing at the address the browser used to reach the page
@@ -49,7 +49,7 @@ The address advertised is derived from the HTTP `Host` header when it matches a 
 Implemented in src/webrtc/ice_lite.c and the session:
 
 - The server never gathers candidates or sends checks. It answers whatever arrives.
-- A binding request is accepted when: type 0x0001, magic cookie present, and USERNAME starts with `<local-ufrag>:`.
+- A binding request is accepted when: type 0x0001, magic cookie present, and USERNAME starts with `<local-ufrag>:` (RFC 8445 §7.3: the first component is the receiver ufrag, so a browser check is `<server-ufrag>:<browser-ufrag>`).
 - The response carries XOR-MAPPED-ADDRESS, MESSAGE-INTEGRITY (HMAC-SHA1 over the message with the length including the MI attribute, keyed with the local pwd) and FINGERPRINT (CRC32 XOR 0x5354554e).
 - The source address of the first valid check becomes the peer address for every later send (STUN responses, DTLS records, SRTP).
 
@@ -79,7 +79,7 @@ Engineering details that matter:
 - **Custom BIOs**: OpenSSL never touches a socket. Inbound datagrams are queued; outbound records go through a callback to `sendto`. This keeps the poll loop in full control.
 - **Fixed MTU**: `SSL_OP_NO_QUERY_MTU` plus `SSL_set_mtu(1200)` keeps every DTLS flight and SRTP packet under the safe path MTU.
 - **Timers**: `DTLSv1_get_timeout` feeds the main poll timeout; expiry triggers `DTLSv1_handle_timeout` for flight retransmission.
-- **Certificate**: an ECDSA P-256 certificate is generated at startup (one per process, no files), and its SHA-256 fingerprint goes into every SDP answer.
+- **Certificate**: an ECDSA P-256 certificate is generated at startup (one per process, no files), and its SHA-256 fingerprint goes into every SDP answer. Peer certificates are self-signed, so the OpenSSL verify callback accepts them and the SHA-256 digest is checked against the offer `a=fingerprint` after the handshake.
 - **Profile pinning**: only `SRTP_AES128_CM_SHA1_80` is offered, which fixes the exported key layout at exactly 60 bytes and matches every browser stack.
 
 ## RTP H.264 packetization

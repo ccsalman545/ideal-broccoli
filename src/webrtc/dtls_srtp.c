@@ -71,6 +71,19 @@ struct DtlsSrtp {
 /* Global certificate and SSL_CTX                                      */
 /* ------------------------------------------------------------------ */
 
+static int dtls_verify_allow_self_signed(int preverify_ok,
+                                         X509_STORE_CTX *ctx)
+{
+    (void) preverify_ok;
+    (void) ctx;
+
+    /*
+     * WebRTC certificates are self-signed. The SDP fingerprint
+     * is compared after the handshake in derive_srtp_keys().
+     */
+    return 1;
+}
+
 static int generate_certificate(void)
 {
     g_key = EVP_EC_gen("P-256");
@@ -177,8 +190,22 @@ int dtls_srtp_global_init(void)
                                SSL_OP_NO_RENEGOTIATION);
 
     SSL_CTX_set_timeout(g_ctx, 30);
-    SSL_CTX_set_verify(g_ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
-                       NULL);
+
+    /*
+     * WebRTC DTLS certificates are self-signed. The default
+     * OpenSSL verify callback rejects them against the system
+     * trust store, which aborts the handshake before we can
+     * check the SDP fingerprint. Accept any peer cert here;
+     * derive_srtp_keys() compares SHA-256 against a=fingerprint.
+     */
+    SSL_CTX_set_verify(g_ctx,
+                       SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                       dtls_verify_allow_self_signed);
+
+#ifdef DTLS1_2_VERSION
+    SSL_CTX_set_min_proto_version(g_ctx, DTLS1_2_VERSION);
+    SSL_CTX_set_max_proto_version(g_ctx, DTLS1_2_VERSION);
+#endif
 
     printf("dtls: local certificate fingerprint (sha-256)\n");
     printf("      %s\n", g_fingerprint);
@@ -652,25 +679,25 @@ void dtls_srtp_tick(DtlsSrtp *session)
         return;
     }
 
-    if (session->state == DTLS_SRTP_HANDSHAKING ||
-        session->state == DTLS_SRTP_INIT) {
-        struct timeval tv;
-
-        if (DTLSv1_get_timeout(session->ssl, &tv) == 1) {
-            if (tv.tv_sec == 0 && tv.tv_usec == 0) {
-                DTLSv1_handle_timeout(session->ssl);
-
-                if (SSL_get_error(session->ssl, 0) == SSL_ERROR_SSL) {
-                    /* keep going, pump reports failures */
-                }
-            }
-        }
-
-        /*
-         * Retransmission data may need another read pump.
-         */
-        pump_ssl(session);
+    /*
+     * Do not SSL_accept() from INIT: that used to start the
+     * handshake (and emit DTLS records) before any ClientHello
+     * and before ICE had a peer address, so the first flight
+     * was dropped.
+     */
+    if (session->state != DTLS_SRTP_HANDSHAKING) {
+        return;
     }
+
+    struct timeval tv;
+
+    if (DTLSv1_get_timeout(session->ssl, &tv) == 1) {
+        if (tv.tv_sec == 0 && tv.tv_usec == 0) {
+            DTLSv1_handle_timeout(session->ssl);
+        }
+    }
+
+    pump_ssl(session);
 }
 
 int dtls_srtp_next_timeout_ms(const DtlsSrtp *session)

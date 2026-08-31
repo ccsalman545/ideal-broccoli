@@ -145,29 +145,18 @@ static int x264_encode(struct X264Backend *encoder,
         return 0;
     }
 
-    if ((size_t) size + 4u * (size_t) nal_count > out_capacity) {
+    if ((size_t) size > out_capacity) {
         return -1;
     }
 
     /*
-     * The RTP packetizer (and the documented access unit
-     * contract) expects Annex-B: prefix every NAL with a
-     * four byte start code.
+     * x264 defaults to Annex-B (b_annexb=1): each NAL already
+     * carries a start code and the payloads are contiguous, so
+     * copy the encoder buffer as-is. Prefixing another start
+     * code produced empty NALs that the packetizer skipped.
      */
-    static const uint8_t start_code[4] = { 0, 0, 0, 1 };
-
-    size_t offset = 0;
-
-    for (int i = 0; i < nal_count; i++) {
-        size_t nal_size = (size_t) nals[i].i_payload;
-
-        memcpy(out + offset, start_code, sizeof(start_code));
-        offset += sizeof(start_code);
-        memcpy(out + offset, nals[i].p_payload, nal_size);
-        offset += nal_size;
-    }
-
-    *out_size = offset;
+    memcpy(out, nals[0].p_payload, (size_t) size);
+    *out_size = (size_t) size;
     *out_is_idr = pic_out.b_keyframe != 0;
 
     return 1;

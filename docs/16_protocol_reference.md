@@ -90,7 +90,7 @@ Accepted inbound (all SRTP unprotected first):
 | BYE (PT 203) | source list | session closed |
 | PLI (PT 206, FMT 1) | 12 bytes | IDR requested (400 ms rate limit) |
 | FIR (PT 206, FMT 4) | 20 bytes | IDR requested |
-| Generic NACK (PT 200, FMT 1) | FCI pairs (PID, bitmap) | cached packets resent verbatim |
+| Generic NACK (PT 205, FMT 1) | FCI pairs (PID, bitmap) | cached packets resent verbatim |
 
 ## JSON API
 
@@ -115,31 +115,38 @@ Response:
 
 ```
 v=0
-o=- 0 0 IN IP4 <server-ip>
+o=- 1 1 IN IP4 <server-ip>
 s=camstream
 t=0 0
+a=ice-lite                          # session-level only (RFC 8839)
+a=ice-options:trickle
 a=group:BUNDLE <video-mid>
 a=msid-semantic: WMS camstream
-m=audio 9 UDP/TLS/RTP/SAVPF 0      # rejected when the offer had audio
+a=fingerprint:sha-256 <cert>        # RFC 7999: hash algo prefix required
+a=setup:passive                     # browser is DTLS client
+a=ice-ufrag:<random8>               # STUN USERNAME starts with this
+a=ice-pwd:<random24>
+m=audio 0 UDP/TLS/RTP/SAVPF 0      # rejected (port 0) when the offer had audio
 c=IN IP4 0.0.0.0
 a=inactive
 a=mid:<audio-mid>
 m=video 9 UDP/TLS/RTP/SAVPF <pt>
 c=IN IP4 <server-ip>
 a=mid:<video-mid>
-a=ice-ufrag:<random8>               # validated on every STUN check
+a=ice-ufrag:<random8>
 a=ice-pwd:<random24>
-a=ice-lite                          # we only answer checks
-a=fingerprint:sha-256 <cert>        # RFC 7999: hash algo prefix required
-a=setup:passive                     # browser is DTLS client
+a=fingerprint:sha-256 <cert>
+a=setup:passive
 a=sendonly
 a=rtcp-mux
+a=msid:camstream camstream-video
+a=ssrc:<ssrc> cname:camstream
 a=rtpmap:<pt> H264/90000
 a=fmtp:<pt> packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1
 a=rtcp-fb:<pt> nack
 a=rtcp-fb:<pt> nack pli
-a=rtcp-fb:<pt> fir
-a=candidate:1 1 udp 2113667327 <server-ip> <udp-port> typ host generation 0
+a=rtcp-fb:<pt> ccm fir
+a=candidate:1 1 udp 2130706431 <server-ip> <udp-port> typ host generation 0
 a=end-of-candidates
 ```
 

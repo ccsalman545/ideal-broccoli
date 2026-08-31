@@ -103,7 +103,7 @@ APP_LIBS = $(DEP_LIBDIRS) -lssl -lcrypto -lsrtp2 -lpthread $(X264_LIB) -lm
 
 # Rules ------------------------------------------------------------------
 
-.PHONY: all camstream clean help
+.PHONY: all camstream clean help test
 
 all: camstream
 
@@ -129,6 +129,14 @@ $(BUILD_DIR)/src/app/web_ui.o: src/app/web_ui.c
 $(BUILD_DIR)/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE) $(CFLAGS) -Ithird_party/mongoose -include alloca.h -c $< -o $@
+
+$(BUILD_DIR)/test_stun: tests/test_stun.c src/webrtc/ice_lite.c include/webrtc/ice_lite.h
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE) $(WARN) $(CFLAGS) $(APP_INCLUDES) \
+	      tests/test_stun.c src/webrtc/ice_lite.c -o $@ $(DEP_LIBDIRS) -lcrypto
+
+test: $(BUILD_DIR)/test_stun
+	$(BUILD_DIR)/test_stun
 
 clean:
 	rm -rf $(BUILD_DIR)
