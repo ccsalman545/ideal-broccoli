@@ -1,8 +1,7 @@
 #
 # camstream build
 #
-# Primary target : build/camstream  (WebRTC server, default)
-# Legacy target  : build/http_server (stage 4 WebSocket prototype)
+# Target : build/camstream  (WebRTC camera server)
 #
 # Dependency overrides (all optional when system packages are
 # installed):
@@ -98,26 +97,9 @@ endif
 
 APP_LIBS = $(DEP_LIBDIRS) -lssl -lcrypto -lsrtp2 -lpthread $(X264_LIB) -lm
 
-# Legacy target: stage 4 WebSocket prototype -----------------------------
-
-LEGACY_INCLUDES = -Iinclude/legacy -Ithird_party/mongoose
-
-LEGACY_CFLAGS = $(BASE) $(WARN) $(CFLAGS) $(LEGACY_INCLUDES)
-
-LEGACY_SOURCES = \
-	src/legacy/http_main.c \
-	src/legacy/http_server.c \
-	src/legacy/frame_stream.c \
-	src/legacy/frame_queue.c \
-	src/legacy/camera_v4l2.c \
-	src/legacy/camera_worker.c \
-	third_party/mongoose/mongoose.c
-
-LEGACY_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(LEGACY_SOURCES))
-
 # Rules ------------------------------------------------------------------
 
-.PHONY: all camstream legacy clean help
+.PHONY: all camstream clean help
 
 all: camstream
 
@@ -144,23 +126,12 @@ $(BUILD_DIR)/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE) $(CFLAGS) -Ithird_party/mongoose -include alloca.h -c $< -o $@
 
-legacy: $(BUILD_DIR)/http_server
-
-$(BUILD_DIR)/http_server: $(LEGACY_OBJECTS)
-	@mkdir -p $(dir $@)
-	$(CC) $(LEGACY_CFLAGS) $(LEGACY_OBJECTS) -o $@ -pthread
-
-$(BUILD_DIR)/src/legacy/%.o: src/legacy/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(LEGACY_CFLAGS) -c $< -o $@
-
 clean:
 	rm -rf $(BUILD_DIR)
 
 help:
 	@echo "targets:"
 	@echo "  make            build build/camstream (WebRTC server)"
-	@echo "  make legacy     build build/http_server (stage 4 prototype)"
 	@echo "  make clean      remove build/"
 	@echo ""
 	@echo "overrides:"

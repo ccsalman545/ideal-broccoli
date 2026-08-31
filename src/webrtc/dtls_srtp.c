@@ -30,7 +30,7 @@
 static SSL_CTX *g_ctx;
 static X509 *g_cert;
 static EVP_PKEY *g_key;
-static char g_fingerprint[104];
+static char g_fingerprint[128];
 static int g_srtp_initialized;
 
 struct DtlsRxPacket {
@@ -55,7 +55,7 @@ struct DtlsSrtp {
     srtp_t srtp_in;
     int srtp_ready;
 
-    char expected_fingerprint[104];
+    char expected_fingerprint[128];
     int handshake_started;
     int fingerprint_ok;
 
@@ -105,7 +105,13 @@ static int generate_certificate(void)
         return -1;
     }
 
-    size_t offset = 0;
+    /*
+     * RFC 7999: the attribute value is "<hash algo> <hex with
+     * colons>". Browsers verify the peer certificate against
+     * this value, so the "sha-256 " prefix is mandatory.
+     */
+    size_t offset = (size_t) snprintf(g_fingerprint, sizeof(g_fingerprint),
+                                      "sha-256 ");
 
     for (unsigned int i = 0; i < md_len; i++) {
         offset += (size_t) snprintf(g_fingerprint + offset,
@@ -332,14 +338,26 @@ static void dtls_set_state(DtlsSrtp *session, DtlsSrtpState state)
 static int fingerprint_hex_equal(const char *sdp_value, unsigned char *md,
                                  unsigned int md_len)
 {
-    char normalized[104];
+    char normalized[128];
     size_t out = 0;
 
     /*
-     * Strip colons and fold case.
+     * The SDP value is "<hash algo> <hex with colons>", e.g.
+     * "sha-256 AA:BB:..". Skip the algorithm token first, then
+     * strip colons and fold case.
      */
-    for (const char *p = sdp_value; *p != 0 && out + 1 < sizeof(normalized); p++) {
-        if (*p == ':' || *p == ' ') {
+    const char *p = sdp_value;
+
+    if (*p != 0) {
+        const char *space = strchr(p, ' ');
+
+        if (space != NULL) {
+            p = space + 1;
+        }
+    }
+
+    for (; *p != 0 && out + 1 < sizeof(normalized); p++) {
+        if (*p == ':') {
             continue;
         }
         normalized[out++] = (char) ((*p >= 'a' && *p <= 'f') ? *p - 32 : *p);

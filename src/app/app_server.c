@@ -3,7 +3,7 @@
  *
  * Composition root:
  *
- *   main thread      Mongoose HTTP/WebSocket loop, signaling,
+ *   main thread      Mongoose HTTP loop (web UI + WebRTC signaling),
  *                    ICE sockets, SRTP send fan out
  *   source thread    V4L2 or test pattern capture into the hub
  *   encode thread    I420 conversion + H.264 into the AU ring
@@ -35,7 +35,6 @@
 #define MAX_RTC_SESSIONS 8
 #define AU_RING_SLOTS 8
 #define AU_SLOT_CAPACITY (512 * 1024)
-#define WS_BACKPRESSURE_BYTES (384 * 1024)
 
 extern const char *web_ui_html;
 
@@ -61,12 +60,6 @@ typedef struct {
     int rtc_active;
 
     RtcSession *sessions[MAX_RTC_SESSIONS];
-
-    FrameHubConsumer *ws_consumer;
-    struct mg_connection *ws_connection;
-    uint64_t ws_frames_sent;
-    uint64_t ws_frames_dropped;
-    uint8_t *ws_packet_scratch;
 
     uint64_t started_ms;
     volatile sig_atomic_t *stop_flag;
@@ -503,8 +496,6 @@ static void handle_status(Server *server,
         "\"captured_frames\":%llu,"
         "\"encoded_frames\":%llu,"
         "\"au_dropped\":%llu,"
-        "\"ws\":{\"active\":%s,\"frames_sent\":%llu,"
-        "\"frames_dropped\":%llu},"
         "\"sessions\":[",
         APP_VERSION,
         (unsigned long long) uptime_s,
@@ -520,10 +511,7 @@ static void handle_status(Server *server,
         server->config->http_port,
         (unsigned long long) source_worker_captured(server->source_worker),
         (unsigned long long) encoder_worker_frames_encoded(server->encoder_worker),
-        (unsigned long long) au_ring_dropped(server->ring),
-        server->ws_connection != NULL ? "true" : "false",
-        (unsigned long long) server->ws_frames_sent,
-        (unsigned long long) server->ws_frames_dropped);
+        (unsigned long long) au_ring_dropped(server->ring));
 
     int session_count = 0;
 
@@ -593,11 +581,6 @@ static void http_event_handler(struct mg_connection *connection,
         struct mg_http_message *message =
             (struct mg_http_message *) event_data;
 
-        if (mg_match(message->uri, mg_str("/ws"), NULL)) {
-            mg_ws_upgrade(connection, message, NULL);
-            return;
-        }
-
         if (mg_match(message->uri, mg_str("/rtc/offer"), NULL)) {
             handle_rtc_offer(server, connection, message);
             return;
@@ -626,101 +609,8 @@ static void http_event_handler(struct mg_connection *connection,
         return;
     }
 
-    case MG_EV_WS_OPEN:
-        if (server->ws_connection == NULL) {
-            server->ws_connection = connection;
-            server->ws_consumer = frame_hub_subscribe(server->hub);
-
-            printf("legacy websocket client connected\n");
-        } else {
-            /*
-             * One legacy viewer at a time: the second one would
-             * double the raw bandwidth.
-             */
-            connection->is_closing = 1;
-        }
-        return;
-
-    case MG_EV_CLOSE:
-        if (server->ws_connection == connection) {
-            if (server->ws_consumer != NULL) {
-                frame_hub_unsubscribe(server->hub, server->ws_consumer);
-                server->ws_consumer = NULL;
-            }
-
-            server->ws_connection = NULL;
-            printf("legacy websocket client disconnected\n");
-        }
-        return;
-
     default:
         return;
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* Legacy WebSocket frame sender                                       */
-/* ------------------------------------------------------------------ */
-
-/*
- * Same binary packet layout as the stage 4 prototype:
- *
- *   offset  size  field
- *   0       4     magic 0x4652414d ( "MARF" little endian )
- *   4       4     width
- *   8       4     height
- *   12      4     pixel format fourcc
- *   16      4     stride
- *   20      4     frame size
- *   24      4     sequence
- *   28      ...   raw frame bytes
- */
-static void ws_send_frames(Server *server)
-{
-    if (server->ws_consumer == NULL || server->ws_connection == NULL) {
-        return;
-    }
-
-    /*
-     * Backpressure: when the socket cannot drain fast enough,
-     * drop frames instead of growing the send buffer.
-     */
-    if (server->ws_connection->send.len > WS_BACKPRESSURE_BYTES) {
-        Frame *dropped;
-
-        while ((dropped = frame_hub_take(server->ws_consumer)) != NULL) {
-            frame_unref(frame_hub_pool(server->hub), dropped);
-            server->ws_frames_dropped++;
-        }
-        return;
-    }
-
-    Frame *frame;
-
-    while ((frame = frame_hub_take(server->ws_consumer)) != NULL) {
-        uint8_t *packet = server->ws_packet_scratch;
-
-        uint32_t header[7];
-
-        header[0] = 0x4652414D;
-        header[1] = frame->width;
-        header[2] = frame->height;
-        header[3] = frame->format;
-        header[4] = frame->stride;
-        header[5] = (uint32_t) frame->size;
-        header[6] = (uint32_t) frame->sequence;
-
-        memcpy(packet, header, sizeof(header));
-        memcpy(packet + sizeof(header), frame->data, frame->size);
-
-        mg_ws_send(server->ws_connection,
-                   (const char *) packet,
-                   sizeof(header) + frame->size,
-                   WEBSOCKET_OP_BINARY);
-
-        frame_unref(frame_hub_pool(server->hub), frame);
-
-        server->ws_frames_sent++;
     }
 }
 
@@ -816,13 +706,6 @@ int app_server_run(const AppConfig *config, volatile sig_atomic_t *stop_flag)
     if (server->ring == NULL || server->encoder_worker == NULL ||
         encoder_worker_start(server->encoder_worker) != 0) {
         fprintf(stderr, "server: encode worker failed to start\n");
-        goto fail;
-    }
-
-    server->ws_packet_scratch =
-        malloc(server->source->frame_size + 28);
-
-    if (server->ws_packet_scratch == NULL) {
         goto fail;
     }
 
@@ -939,7 +822,7 @@ int app_server_run(const AppConfig *config, volatile sig_atomic_t *stop_flag)
         }
 
         /*
-         * 2. Mongoose HTTP and WebSocket traffic.
+         * 2. Mongoose HTTP traffic: web UI and WebRTC signaling.
          */
         mg_mgr_poll(&server->mgr, 0);
 
@@ -977,12 +860,7 @@ int app_server_run(const AppConfig *config, volatile sig_atomic_t *stop_flag)
         }
 
         /*
-         * 5. Legacy WebSocket transport.
-         */
-        ws_send_frames(server);
-
-        /*
-         * 6. Reap closed sessions.
+         * 5. Reap closed sessions.
          */
         int live_sessions = 0;
 
@@ -1026,14 +904,9 @@ int app_server_run(const AppConfig *config, volatile sig_atomic_t *stop_flag)
     source_worker_stop(server->source_worker);
     source_worker_destroy(server->source_worker);
 
-    if (server->ws_consumer != NULL) {
-        frame_hub_unsubscribe(server->hub, server->ws_consumer);
-    }
-
     frame_hub_destroy(server->hub);
     video_source_close(server->source);
 
-    free(server->ws_packet_scratch);
     free(server);
 
     dtls_srtp_global_shutdown();
@@ -1071,7 +944,6 @@ fail:
         video_source_close(server->source);
     }
 
-    free(server->ws_packet_scratch);
     free(server);
 
     dtls_srtp_global_shutdown();

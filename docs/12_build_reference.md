@@ -26,7 +26,6 @@ sudo apt install build-essential libssl-dev libsrtp2-dev libx264-dev
 
 ```bash
 make                # build/camstream, the WebRTC server (default)
-make legacy         # build/http_server, the stage 4 WebSocket prototype
 make clean          # remove build/
 make help           # quick reference
 ```

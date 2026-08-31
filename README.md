@@ -25,11 +25,11 @@ One binary, `build/camstream`, serves:
 | Bandwidth at 640x480@30 | ~139 Mbps per viewer | ~2 to 4 Mbps per viewer |
 | Encryption | none | DTLS 1.2 handshake, SRTP AES128 with per session keys |
 | Loss recovery | none | NACK retransmission cache, PLI keyframe requests |
-| Viewers | 1 WebSocket client | up to 8 simultaneous WebRTC sessions + 1 legacy |
-| UI | basic canvas page | dashboard: stats, timeline, logs, sparklines, fallback |
-| Build | http_server only | `make` (WebRTC) + `make legacy` (stage 4 preserved) |
+| Viewers | 1 WebSocket client | up to 8 simultaneous WebRTC sessions |
+| UI | basic canvas page | dashboard: stats, timeline, logs, sparklines |
+| Build | http_server only | `make` (WebRTC) |
 
-The legacy WebSocket transport is still available from the web UI as a diagnostics fallback.
+WebRTC is the only media transport: HTTP is used for the web UI and WebRTC signaling only, there is no second streaming protocol.
 
 ## Quick start
 
@@ -70,7 +70,6 @@ Fedora: `sudo dnf install gcc make openssl-devel libsrtp-devel x264-devel`
 | [docs/15_optimization_notes.md](docs/15_optimization_notes.md) | Every optimization, before and after |
 | [docs/16_protocol_reference.md](docs/16_protocol_reference.md) | Packet formats, ports, JSON API |
 | [docs/17_troubleshooting.md](docs/17_troubleshooting.md) | Decision tree and fault tables |
-| [docs/04_http_websocket_test.md](docs/04_http_websocket_test.md) | Stage 4 legacy test notes (kept for history) |
 
 ## System architecture
 
@@ -112,12 +111,12 @@ flowchart LR
     NET --> ICE --> DTLS --> SRTP --> RTP
 
     B1["Browser 1\nRTCPeerConnection"]
-    B2["Browser 2"]
-    B3["Browser 3 (legacy)\ncanvas over WebSocket"]
+    B2["Browser 2\nRTCPeerConnection"]
+    B3["Browser 3\nRTCPeerConnection"]
 
     NET -- "UDP 50000+" --> B1
     NET -- "UDP 50001+" --> B2
-    NET -- "TCP /ws raw YUYV" --> B3
+    NET -- "UDP 50002+" --> B3
 ```
 
 ### Thread model
@@ -138,7 +137,7 @@ flowchart TB
     subgraph T3["thread 3: network (main)"]
         C1["poll() session UDP fds"] --> C2["STUN / DTLS / RTCP demux"]
         C2 --> C3["au_ring_pop() -> RTP -> SRTP -> sendto"]
-        C3 --> C4["Mongoose poll\nHTTP, signaling, WebSocket"]
+        C3 --> C4["Mongoose poll\nHTTP: web UI + WebRTC signaling"]
     end
 
     A2 -. "pooled frame, refcounted" .-> B1
@@ -239,7 +238,7 @@ At runtime the hardware path tolerates transient stalls (returns 0 output while 
 | `-H, --height N` | 480 | capture height |
 | `-F, --fps N` | 30 | frames per second |
 | `-l, --listen ADDR` | `0.0.0.0` | HTTP listen address |
-| `-p, --http-port N` | 8080 | HTTP and WebSocket port |
+| `-p, --http-port N` | 8080 | HTTP port (web UI + signaling) |
 | `-u, --udp-port N` | 50000 | base UDP port for media, one per viewer |
 | `-e, --encoder MODE` | `auto` | `auto`, `hw`, `hw:/dev/videoNN`, `sw` |
 | `-b, --bitrate KBPS` | 2500 | target bitrate |
@@ -254,7 +253,6 @@ At runtime the hardware path tolerates transient stalls (returns 0 output while 
 | `GET /status` | JSON: source, encoder, sessions, interfaces, counters |
 | `POST /rtc/offer` | signaling: SDP offer in, SDP answer out |
 | `POST /rtc/close` | close one session by `session_id` |
-| `GET /ws` | legacy WebSocket upgrade (raw YUYV binary frames) |
 
 `GET /status` example (trimmed):
 
@@ -298,7 +296,6 @@ include/
                 h264_encoder.h, encoder_worker.h, au_ring.h, source_worker.h
   webrtc/       ice_lite.h, dtls_srtp.h, rtp_h264.h, rtcp.h, sdp.h,
                 webrtc_session.h
-  legacy/       stage 4 headers (untouched)
 src/
   camstream_main.c
   app/          app_server.c, app_config.c, web_ui.c
@@ -308,7 +305,6 @@ src/
                 encoder_worker.c
   webrtc/       ice_lite.c, dtls_srtp.c, rtp_h264.c, rtcp.c, sdp.c,
                 webrtc_session.c
-  legacy/       stage 4 sources (untouched, build with make legacy)
 third_party/
   mongoose/     Mongoose 7.23 networking library
 docs/           architecture, internals, build, LAN, Pi, optimization,
@@ -321,7 +317,7 @@ Verified on every commit in CI-less fashion by scripted checks:
 
 | Check | Result |
 |---|---|
-| `make` and `make legacy` compile warning free (gcc 12, C11) | pass |
+| `make` compiles warning free (gcc 12, C11) | pass |
 | SDP offer parsing and answer generation | pass |
 | STUN binding request validation, XOR-MAPPED + MI + fingerprint response | pass |
 | Session create, idle timeout, `/rtc/close` lifecycle | pass |

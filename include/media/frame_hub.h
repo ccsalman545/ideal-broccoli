@@ -5,8 +5,8 @@
  *
  * Design:
  *   - One producer (the source worker thread) publishes frames.
- *   - N consumers (encoder thread, WebSocket sender) each own a
- *     single slot mailbox.
+ *   - N consumers (the encoder thread today) each own a single
+ *     slot mailbox.
  *   - Mailbox semantics are keep-newest: if a consumer has not
  *     taken the previous frame yet, the previous frame is
  *     dropped and replaced. A slow consumer therefore never

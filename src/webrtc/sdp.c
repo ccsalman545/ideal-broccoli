@@ -232,26 +232,36 @@ size_t sdp_build_answer(const SdpOffer *offer,
         offset += (size_t) written;
     }
 
+    /*
+     * The candidate line must follow the RFC 8445 grammar exactly:
+     *
+     *   candidate:<foundation> <component-id> <transport>
+     *            <priority> <connection-address> <port>
+     *            typ <candidate-type> [generation <n>]
+     *
+     * Browsers reject the whole answer when any of the integer
+     * fields is missing or out of order (the component id used
+     * to be omitted, which made Chromium fail with
+     * "SDP Parse Error ... Integer parsing error" on this line).
+     */
     written = snprintf(buffer + offset, sizeof(buffer) - offset,
         "m=video 9 UDP/TLS/RTP/SAVPF %d\r\n"
         "c=IN IP4 %s\r\n"
         "a=mid:%s\r\n"
         "a=ice-ufrag:%s\r\n"
         "a=ice-pwd:%s\r\n"
-        "a=ice-options:trickle\r\n"
         "a=ice-lite\r\n"
         "a=fingerprint:%s\r\n"
         "a=setup:passive\r\n"
         "a=sendonly\r\n"
         "a=rtcp-mux\r\n"
-        "a=rtcp:%u IN IP4 %s\r\n"
         "a=rtpmap:%d H264/90000\r\n"
         "a=fmtp:%d packetization-mode=1;profile-level-id=42e01f;"
             "level-asymmetry-allowed=1\r\n"
         "a=rtcp-fb:%d nack\r\n"
         "a=rtcp-fb:%d nack pli\r\n"
-        "a=rtcp-fb:%d ccm fir\r\n"
-        "a=candidate:1 udp 2113667327 %s %u typ host generation 0\r\n"
+        "a=rtcp-fb:%d fir\r\n"
+        "a=candidate:1 1 udp 2113667327 %s %u typ host generation 0\r\n"
         "a=end-of-candidates\r\n",
         offer->h264_payload_type,
         advertise_ip,
@@ -259,7 +269,6 @@ size_t sdp_build_answer(const SdpOffer *offer,
         local_ufrag,
         local_pwd,
         local_fingerprint,
-        (unsigned) udp_port, advertise_ip,
         offer->h264_payload_type,
         offer->h264_payload_type,
         offer->h264_payload_type,

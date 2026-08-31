@@ -88,8 +88,8 @@ camstream needs, with defaults:
 
 | Port | Protocol | Purpose |
 |---|---|---|
-| 8080 | TCP | web page, REST signaling, legacy WebSocket |
-| 50000 to 50007 | UDP | one media port per simultaneous viewer |
+| 8080 | TCP | web page + WebRTC signaling (HTTP) |
+| 50000 to 50007 | UDP | one media port per simultaneous viewer (WebRTC) |
 
 **ufw (Ubuntu and most desktop distros), run on laptop A:**
 
@@ -171,7 +171,7 @@ The end to end glass to glass latency on this path is typically 150 to 300 ms at
 | SDP ok, ICE fails | firewall blocks UDP range, or browser is behind a restrictive proxy | open UDP ports, avoid proxies for this page |
 | ICE ok, DTLS stalls | MTU issues or very old browser | update browser, check cable quality |
 | Video stalls then resumes | packet loss bursts | lower bitrate with `-b 1500`, shorter keyframe `-K 1` |
-| Legacy mode works, WebRTC does not | TCP passes, UDP blocked | firewall UDP range, see step 4 |
+| Page loads but ICE never succeeds | TCP 8080 passes, UDP blocked | firewall UDP range, see step 4 |
 
 More depth in [17_troubleshooting.md](17_troubleshooting.md).
 

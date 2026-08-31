@@ -87,6 +87,39 @@ void rtcp_parse(const uint8_t *buffer,
 
 
         switch (packet_type) {
+        case 200: {
+            /*
+             * Generic NACK (RTPFB, FMT=1). FCI entries are
+             * 4-byte ( PID, bitmask of the 16 following seqs ).
+             */
+            if (count_or_fmt == 1) {
+                const size_t fci = offset + 12;
+
+                for (size_t i = fci;
+                     i + 4 <= offset + packet_len &&
+                     feedback->nack_seqs < 128;
+                     i += 4) {
+                    uint16_t pid = read_be16(buffer + i);
+                    uint16_t mask = read_be16(buffer + i + 2);
+
+                    if (feedback->nack_seqs < 128) {
+                        feedback->nack_seq[feedback->nack_seqs++] = pid;
+                    }
+
+                    for (int bit = 0;
+                         bit < 16 &&
+                         feedback->nack_seqs < 128;
+                         bit++) {
+                        if (mask & (1u << bit)) {
+                            feedback->nack_seq[feedback->nack_seqs++] =
+                                (uint16_t) (pid + bit + 1);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+
         case 201: {
             /*
              * Receiver Report: first report block only.
@@ -112,34 +145,6 @@ void rtcp_parse(const uint8_t *buffer,
                 feedback->pli++;
             } else if (count_or_fmt == 4) {
                 feedback->fir++;
-            } else if (count_or_fmt == 2) {
-                /*
-                 * Generic NACK: FCI entries of 4 bytes
-                 * ( PID, bitmask of the 16 following seqs ).
-                 */
-                const size_t fci = offset + 12;
-
-                for (size_t i = fci;
-                     i + 4 <= offset + packet_len &&
-                     feedback->nack_seqs < 128;
-                     i += 4) {
-                    uint16_t pid = read_be16(buffer + i);
-                    uint16_t mask = read_be16(buffer + i + 2);
-
-                    if (feedback->nack_seqs < 128) {
-                        feedback->nack_seq[feedback->nack_seqs++] = pid;
-                    }
-
-                    for (int bit = 0;
-                         bit < 16 &&
-                         feedback->nack_seqs < 128;
-                         bit++) {
-                        if (mask & (1u << bit)) {
-                            feedback->nack_seq[feedback->nack_seqs++] =
-                                (uint16_t) (pid + bit + 1);
-                        }
-                    }
-                }
             }
             break;
         }

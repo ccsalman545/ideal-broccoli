@@ -10,7 +10,6 @@ Byte level formats of everything camstream puts on the wire or accepts.
 | `http://host:8080/status` | TCP | JSON status |
 | `http://host:8080/rtc/offer` | TCP | SDP signaling POST |
 | `http://host:8080/rtc/close` | TCP | session teardown POST |
-| `ws://host:8080/ws` | TCP | legacy raw frame transport |
 | `udp 50000 + slot` | UDP | one socket per WebRTC session: STUN, DTLS, RTP, RTCP |
 
 ## Datagram classification (RFC 7983)
@@ -91,22 +90,7 @@ Accepted inbound (all SRTP unprotected first):
 | BYE (PT 203) | source list | session closed |
 | PLI (PT 206, FMT 1) | 12 bytes | IDR requested (400 ms rate limit) |
 | FIR (PT 206, FMT 4) | 20 bytes | IDR requested |
-| Generic NACK (PT 206, FMT 2) | FCI pairs (PID, bitmap) | cached packets resent verbatim |
-
-## Legacy WebSocket frame
-
-Binary WebSocket message, little endian:
-
-| Offset | Size | Field |
-|---|---|---|
-| 0 | 4 | magic `0x4652414d` ("MARF") |
-| 4 | 4 | width |
-| 8 | 4 | height |
-| 12 | 4 | pixel format fourcc (YUYV or YU12) |
-| 16 | 4 | stride |
-| 20 | 4 | frame byte size |
-| 24 | 4 | sequence |
-| 28 | ... | raw frame bytes |
+| Generic NACK (PT 200, FMT 1) | FCI pairs (PID, bitmap) | cached packets resent verbatim |
 
 ## JSON API
 
@@ -145,9 +129,8 @@ c=IN IP4 <server-ip>
 a=mid:<video-mid>
 a=ice-ufrag:<random8>               # validated on every STUN check
 a=ice-pwd:<random24>
-a=ice-options:trickle
 a=ice-lite                          # we only answer checks
-a=fingerprint:sha-256 <cert>
+a=fingerprint:sha-256 <cert>        # RFC 7999: hash algo prefix required
 a=setup:passive                     # browser is DTLS client
 a=sendonly
 a=rtcp-mux
@@ -155,7 +138,13 @@ a=rtpmap:<pt> H264/90000
 a=fmtp:<pt> packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1
 a=rtcp-fb:<pt> nack
 a=rtcp-fb:<pt> nack pli
-a=rtcp-fb:<pt> ccm fir
-a=candidate:1 udp 2113667327 <server-ip> <udp-port> typ host generation 0
+a=rtcp-fb:<pt> fir
+a=candidate:1 1 udp 2113667327 <server-ip> <udp-port> typ host generation 0
 a=end-of-candidates
 ```
+
+The candidate line follows the RFC 8445 grammar
+`candidate:<foundation> <component-id> <transport> <priority>
+<connection-address> <port> typ <candidate-type>`; browsers reject
+the whole answer if any of the integer fields is missing or out of
+order.

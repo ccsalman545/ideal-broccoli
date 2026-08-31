@@ -102,8 +102,6 @@ The network thread owns sessions exclusively: no locks needed anywhere in src/we
 
 ## Web UI
 
-`src/app/web_ui.c` embeds the complete dashboard as one C string: no external asset loading, no CDN, works on an isolated LAN. It contains the WebRTC player with `getStats()` polling, sparkline charts, the six step connection timeline, the viewer table, the server card and the legacy WebSocket fallback with canvas YUYV rendering.
+`src/app/web_ui.c` embeds the complete dashboard as one C string: no external asset loading, no CDN, works on an isolated LAN. It contains the WebRTC player with `getStats()` polling, sparkline charts, the six step connection timeline, the viewer table and the server card.
 
-## Legacy stage 4
-
-The previous generation sources live untouched under `src/legacy/` and `include/legacy/`, buildable with `make legacy` for comparison and regression testing.
+WebRTC is the only media transport in this project: there is no second streaming protocol, no MJPEG, no RTSP and no raw-frame WebSocket channel. Mongoose serves the page and the WebRTC signaling (`/rtc/offer`, `/rtc/close`) over HTTP; all video goes over the WebRTC stack (ICE, DTLS, SRTP, RTP) on UDP.
