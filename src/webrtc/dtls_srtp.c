@@ -51,8 +51,12 @@ struct DtlsSrtp {
     size_t rx_tail;         /* next to write */
     size_t rx_count;
 
-    srtp_t srtp_out;
-    srtp_t srtp_in;
+    /*
+     * libsrtp2 sessions. srtp_t is opaque in libsrtp2, so the
+     * sessions are referenced by pointer.
+     */
+    srtp_t *srtp_out;
+    srtp_t *srtp_in;
     int srtp_ready;
 
     char expected_fingerprint[128];
@@ -686,11 +690,6 @@ int dtls_srtp_next_timeout_ms(const DtlsSrtp *session)
     }
 
     return (int) (tv.tv_sec * 1000 + tv.tv_usec / 1000);
-}
-
-DtlsSrtpState dtls_srtp_state(const DtlsSrtp *session)
-{
-    return session != NULL ? session->state : DTLS_SRTP_FAILED;
 }
 
 int dtls_srtp_send_rtp(DtlsSrtp *session, uint8_t *pkt, size_t *len)

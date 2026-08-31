@@ -22,7 +22,6 @@ struct SourceWorker {
     int started;
 
     uint64_t captured;
-    uint64_t errors;
 };
 
 static void *source_worker_thread(void *arg)
@@ -50,7 +49,6 @@ static void *source_worker_thread(void *arg)
                                              &buffer_index);
 
         if (result < 0) {
-            worker->errors++;
             usleep(20000);
             continue;
         }
@@ -139,11 +137,6 @@ void source_worker_join(SourceWorker *worker)
 uint64_t source_worker_captured(const SourceWorker *worker)
 {
     return worker != NULL ? worker->captured : 0;
-}
-
-uint64_t source_worker_errors(const SourceWorker *worker)
-{
-    return worker != NULL ? worker->errors : 0;
 }
 
 void source_worker_destroy(SourceWorker *worker)

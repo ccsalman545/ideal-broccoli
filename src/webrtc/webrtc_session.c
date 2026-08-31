@@ -465,10 +465,12 @@ void rtc_session_tick(RtcSession *session, uint64_t now)
     }
 
     /*
-     * Idle timeout.
+     * Idle timeout. last_rx_ms starts at creation, so a session
+     * that never receives even the first STUN check is reaped
+     * too (otherwise a vanished browser would hold the slot
+     * forever).
      */
-    if (now - session->last_rx_ms > SESSION_IDLE_TIMEOUT_MS &&
-        session->state != RTC_NEW) {
+    if (now - session->last_rx_ms > SESSION_IDLE_TIMEOUT_MS) {
         printf("rtc %08x: idle timeout\n", session->config.id);
         rtc_session_close(session);
         return;
@@ -561,11 +563,6 @@ void rtc_session_request_idr(RtcSession *session)
     session->idr_requested = 1;
 
     session->config.on_idr_request(session->config.server);
-}
-
-int rtc_session_is_streaming(const RtcSession *session)
-{
-    return session != NULL && session->state == RTC_STREAMING;
 }
 
 RtcSessionState rtc_session_state(const RtcSession *session)

@@ -145,15 +145,26 @@ static int x264_encode(struct X264Backend *encoder,
         return 0;
     }
 
-    if ((size_t) size > out_capacity) {
+    if ((size_t) size + 4u * (size_t) nal_count > out_capacity) {
         return -1;
     }
+
+    /*
+     * The RTP packetizer (and the documented access unit
+     * contract) expects Annex-B: prefix every NAL with a
+     * four byte start code.
+     */
+    static const uint8_t start_code[4] = { 0, 0, 0, 1 };
 
     size_t offset = 0;
 
     for (int i = 0; i < nal_count; i++) {
-        memcpy(out + offset, nals[i].p_payload, nals[i].i_payload);
-        offset += (size_t) nals[i].i_payload;
+        size_t nal_size = (size_t) nals[i].i_payload;
+
+        memcpy(out + offset, start_code, sizeof(start_code));
+        offset += sizeof(start_code);
+        memcpy(out + offset, nals[i].p_payload, nal_size);
+        offset += nal_size;
     }
 
     *out_size = offset;

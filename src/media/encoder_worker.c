@@ -177,14 +177,26 @@ EncoderWorker *encoder_worker_create(FrameHub *hub,
 
     size_t i420_size = (size_t) width * height * 3 / 2;
 
-    worker->i420 = malloc(i420_size);
-    worker->au_buffer = malloc(AU_SCRATCH_CAPACITY);
+    if (i420_size > ENCODE_SCRATCH_MAX) {
+        fprintf(stderr,
+                "encode worker: %ux%u exceeds the scratch limit (%lu MB)\n",
+                width, height, (unsigned long) (ENCODE_SCRATCH_MAX / 1048576));
+        if (worker->consumer != NULL) {
+            frame_hub_unsubscribe(hub, worker->consumer);
+        }
+        free(worker);
+        return NULL;
+    }
 
-    if (worker->consumer == NULL || worker->i420 == NULL ||
-        worker->au_buffer == NULL || i420_size > ENCODE_SCRATCH_MAX) {
-        frame_hub_unsubscribe(hub, worker->consumer);
-        free(worker->i420);
-        free(worker->au_buffer);
+    uint8_t *i420 = malloc(i420_size);
+    uint8_t *au_buffer = malloc(AU_SCRATCH_CAPACITY);
+
+    if (worker->consumer == NULL || i420 == NULL || au_buffer == NULL) {
+        if (worker->consumer != NULL) {
+            frame_hub_unsubscribe(hub, worker->consumer);
+        }
+        free(i420);
+        free(au_buffer);
         free(worker);
         return NULL;
     }
@@ -196,6 +208,8 @@ EncoderWorker *encoder_worker_create(FrameHub *hub,
     worker->active = active;
     worker->width = width;
     worker->height = height;
+    worker->i420 = i420;
+    worker->au_buffer = au_buffer;
     worker->running = 1;
 
     return worker;
@@ -228,11 +242,6 @@ void encoder_worker_join(EncoderWorker *worker)
         pthread_join(worker->thread, NULL);
         worker->started = 0;
     }
-}
-
-uint64_t encoder_worker_frames_in(const EncoderWorker *worker)
-{
-    return worker != NULL ? worker->frames_in : 0;
 }
 
 uint64_t encoder_worker_frames_encoded(const EncoderWorker *worker)

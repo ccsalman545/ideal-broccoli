@@ -79,8 +79,6 @@ FramePool *frame_hub_pool(FrameHub *hub);
  * Monotonic publisher counter (frames that made it into the
  * hub). For /status reporting.
  */
-uint64_t frame_hub_published_count(const FrameHub *hub);
-
 void frame_hub_destroy(FrameHub *hub);
 
 #endif

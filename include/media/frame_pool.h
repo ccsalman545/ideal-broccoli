@@ -64,9 +64,6 @@ void frame_ref(Frame *frame);
  */
 void frame_unref(FramePool *pool, Frame *frame);
 
-size_t frame_pool_available(const FramePool *pool);
-size_t frame_pool_capacity(const FramePool *pool);
-
 void frame_pool_destroy(FramePool *pool);
 
 #endif

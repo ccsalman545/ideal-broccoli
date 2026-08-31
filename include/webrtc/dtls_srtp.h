@@ -59,15 +59,18 @@ int dtls_srtp_global_init(void);
 void dtls_srtp_global_shutdown(void);
 
 /*
- * SHA-256 fingerprint of the local certificate, formatted as
- * "AA:BB:CC:..." (uppercase, colon separated).
+ * SHA-256 fingerprint of the local certificate, formatted for
+ * SDP as "sha-256 AA:BB:CC:..." (RFC 7999, uppercase, colon
+ * separated).
  */
 const char *dtls_srtp_local_fingerprint(void);
 
 /*
- * Expect this remote fingerprint (from the SDP offer). The
- * handshake fails when the peer certificate does not match.
- * Format "AA:BB:..." or "AABBCC..." both accepted.
+ * Expect this remote fingerprint (from the SDP offer, value of
+ * the a=fingerprint line). The handshake fails when the peer
+ * certificate does not match. The hash algorithm token
+ * ("sha-256 ") is accepted and ignored; the digest may be
+ * colon separated or not, upper or lower case.
  */
 void dtls_srtp_set_expected_fingerprint(DtlsSrtp *session,
                                         const char *fingerprint);
@@ -86,8 +89,6 @@ void dtls_srtp_tick(DtlsSrtp *session);
 
 /* Milliseconds until the next DTLS timer fires, -1 if none. */
 int dtls_srtp_next_timeout_ms(const DtlsSrtp *session);
-
-DtlsSrtpState dtls_srtp_state(const DtlsSrtp *session);
 
 /*
  * Protect and send one RTP packet. pkt points at a complete

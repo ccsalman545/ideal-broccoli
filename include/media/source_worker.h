@@ -27,7 +27,6 @@ void source_worker_stop(SourceWorker *worker);
 void source_worker_join(SourceWorker *worker);
 
 uint64_t source_worker_captured(const SourceWorker *worker);
-uint64_t source_worker_errors(const SourceWorker *worker);
 
 void source_worker_destroy(SourceWorker *worker);
 

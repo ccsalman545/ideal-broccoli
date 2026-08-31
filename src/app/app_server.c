@@ -124,12 +124,10 @@ static size_t collect_interfaces(InterfaceInfo *out, size_t max)
  * the browser used to reach us, otherwise the first private
  * IPv4 address.
  */
-static void choose_advertise_ip(Server *server,
-                                const char *host_header,
+static void choose_advertise_ip(const char *host_header,
                                 char *out,
                                 size_t out_size)
 {
-    (void) server;
     InterfaceInfo interfaces[16];
     size_t count = collect_interfaces(interfaces, 16);
 
@@ -380,7 +378,7 @@ static void handle_rtc_offer(Server *server,
 
     char advertise_ip[INET_ADDRSTRLEN];
 
-    choose_advertise_ip(server, host_copy, advertise_ip, sizeof(advertise_ip));
+    choose_advertise_ip(host_copy, advertise_ip, sizeof(advertise_ip));
 
     uint32_t session_id = 0;
 
@@ -396,8 +394,7 @@ static void handle_rtc_offer(Server *server,
         .offer = offer,
         .server = server,
         .on_idr_request = session_on_idr_request,
-        .on_closed = session_on_closed,
-        .log = NULL
+        .on_closed = session_on_closed
     };
 
     RtcSession *session = NULL;
@@ -429,8 +426,7 @@ static void handle_rtc_offer(Server *server,
                                 "{\"type\":\"answer\",\"session_id\":%u,"
                                 "\"udp_port\":%u,\"sdp\":\"",
                                 session_id,
-                                rtc_session_fd(session) >= 0 ?
-                                    (unsigned) session_config.udp_port : 0u);
+                                (unsigned) session_config.udp_port);
 
     offset += json_escape_append(answer, payload + offset,
                                  sizeof(payload) - offset);

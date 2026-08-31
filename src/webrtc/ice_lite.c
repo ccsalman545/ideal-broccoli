@@ -25,7 +25,7 @@ RtcPacketClass rtc_classify_packet(const uint8_t *buf, size_t len)
         return RTC_PKT_STUN;
     }
 
-    if (buf[0] >= 20 && buf[0] <= 64) {
+    if (buf[0] >= 20 && buf[0] <= 63) {
         return RTC_PKT_DTLS;
     }
 
