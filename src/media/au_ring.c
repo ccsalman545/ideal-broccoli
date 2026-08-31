@@ -17,7 +17,6 @@ struct AuRing {
     size_t head;                /* next to read */
     size_t tail;                /* next to write */
     size_t count;
-    uint64_t pushed;
     uint64_t dropped;
     uint64_t sequence;
     pthread_mutex_t lock;
@@ -83,7 +82,6 @@ int au_ring_push(AuRing *ring,
 
     ring->tail = (tail + 1) % ring->slot_count;
     ring->count++;
-    ring->pushed++;
 
     pthread_mutex_unlock(&ring->lock);
 
@@ -127,11 +125,6 @@ int au_ring_pop(AuRing *ring,
     pthread_mutex_unlock(&ring->lock);
 
     return ok ? 1 : 0;
-}
-
-uint64_t au_ring_pushed(const AuRing *ring)
-{
-    return ring != NULL ? ring->pushed : 0;
 }
 
 uint64_t au_ring_dropped(const AuRing *ring)

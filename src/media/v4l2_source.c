@@ -5,7 +5,7 @@
  *
  * V4L2 mmap capture behind the VideoSource interface.
  *
- * Differences from the legacy stage 4 code:
+ * Design notes:
  *   - poll() instead of select()
  *   - short poll timeout so shutdown is never delayed
  *   - YUYV preferred, YU12 (planar 4:2:0) accepted as fallback

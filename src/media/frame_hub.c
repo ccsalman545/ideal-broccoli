@@ -22,7 +22,6 @@ struct FrameHub {
     FramePool *pool;
     pthread_mutex_t lock;           /* guards the consumer list */
     FrameHubConsumer *consumers;
-    uint64_t published;
 };
 
 FrameHub *frame_hub_create(size_t buffer_capacity, size_t pool_count)
@@ -136,8 +135,6 @@ int frame_hub_publish(FrameHub *hub,
 
     pthread_mutex_lock(&hub->lock);
 
-    hub->published++;
-
     /*
      * Deliver to every consumer mailbox. Keep-newest policy.
      */
@@ -194,11 +191,6 @@ Frame *frame_hub_take(FrameHubConsumer *consumer)
 FramePool *frame_hub_pool(FrameHub *hub)
 {
     return hub != NULL ? hub->pool : NULL;
-}
-
-uint64_t frame_hub_published_count(const FrameHub *hub)
-{
-    return hub != NULL ? hub->published : 0;
 }
 
 void frame_hub_destroy(FrameHub *hub)

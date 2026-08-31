@@ -60,7 +60,6 @@ typedef struct {
     void *server;
     void (*on_idr_request)(void *server);
     void (*on_closed)(void *server, RtcSession *session);
-    void (*log)(void *server, const char *format, ...);
 } RtcSessionConfig;
 
 typedef struct {
@@ -110,8 +109,6 @@ int rtc_session_send_access_unit(RtcSession *session,
 
 /* Ask the encoder for a keyframe (rate limited internally). */
 void rtc_session_request_idr(RtcSession *session);
-
-int rtc_session_is_streaming(const RtcSession *session);
 
 RtcSessionState rtc_session_state(const RtcSession *session);
 

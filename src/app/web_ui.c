@@ -6,10 +6,8 @@
  * Design constraints:
  *   - fully self contained: no CDN, no external fonts, works
  *     on an isolated LAN with no internet access
- *   - WebRTC first: <video> element fed by RTCPeerConnection,
+ *   - WebRTC only: <video> element fed by RTCPeerConnection,
  *     with a live statistics dashboard drawn from getStats()
- *   - legacy raw WebSocket transport available as a fallback
- *     with canvas YUYV rendering
  *   - single quotes only inside the markup so the C string
  *     needs no escaped quotes
  */
@@ -72,7 +70,7 @@ const char *web_ui_html =
 "color:var(--dim);margin-bottom:12px;display:flex;align-items:center;gap:8px}"
 ".stage{position:relative;background:#05070f;border-radius:18px;overflow:hidden;"
 "border:1px solid var(--line)}"
-".stage video,.stage canvas{display:block;width:100%;aspect-ratio:4/3;"
+".stage video{display:block;width:100%;aspect-ratio:4/3;"
 "object-fit:contain;background:#000}"
 ".stage .idle{position:absolute;inset:0;display:grid;place-items:center;"
 "text-align:center;color:var(--dim);gap:10px;font-size:14px;padding:24px}"
@@ -157,7 +155,6 @@ const char *web_ui_html =
 "live video</h2>"
 "<div class='stage'>"
 "<video id='vid' autoplay playsinline muted></video>"
-"<canvas id='cvs' width='640' height='480' style='display:none'></canvas>"
 "<div class='idle' id='idle'>"
 "<div><div class='big'>📷</div>"
 "<div>Press <b>Start WebRTC</b> to connect.<br>"
@@ -171,7 +168,6 @@ const char *web_ui_html =
 "<div class='controls'>"
 "<button class='primary' id='btnStart'>Start WebRTC</button>"
 "<button class='danger' id='btnStop' disabled>Stop</button>"
-"<button class='ghost' id='btnLegacy'>Legacy WebSocket</button>"
 "<button class='ghost' id='btnShot' disabled>Snapshot</button>"
 "<button class='ghost' id='btnFull'>Fullscreen</button>"
 "</div>"
@@ -228,8 +224,8 @@ const char *web_ui_html =
 "</div>"
 
 "<footer>"
-"WebRTC path: H.264 over RTP, protected with DTLS 1.2 and SRTP, media on UDP. "
-"Legacy path: raw YUYV frames over WebSocket TCP, high bandwidth, for diagnostics only.<br>"
+"Video path: H.264 over RTP, protected with DTLS 1.2 and SRTP, media on UDP "
+"(WebRTC is the only transport; HTTP is used for the page and signaling only).<br>"
 "If media does not connect while the page loads, the browser probably cannot reach "
 "the UDP port (NAT, proxy or firewall). Open this page directly on the LAN and allow "
 "the UDP port range in the firewall. See the LAN setup guide in the repository docs."
@@ -239,11 +235,9 @@ const char *web_ui_html =
 
 "<script>"
 "var vid=document.getElementById('vid');"
-"var cvs=document.getElementById('cvs');"
-"var ctx=cvs.getContext('2d');"
 "var log=document.getElementById('log');"
 "var hint=document.getElementById('hint');"
-"var pc=null,ws=null,sessionId=0,statsTimer=null,monitorTimer=null;"
+"var pc=null,sessionId=0,statsTimer=null,monitorTimer=null;"
 "var lastBytes=0,lastDecoded=0,lastLost=0,lastTime=0;"
 "var bitHist=[],fpsHist=[];"
 
@@ -400,77 +394,22 @@ const char *web_ui_html =
 "addLog('no video within 9s, see hint','warn');"
 "showHint('Signaling succeeded but no video arrived. Likely causes: "
 "UDP media blocked by firewall (open the UDP port range), or this page was "
-"opened through a reverse proxy that cannot forward UDP. "
-"Legacy WebSocket mode works over TCP and can confirm the camera path.')}}"
-
-/* ---------------- legacy websocket ---------------- */
-
-"function yuyvToImage(data,w,h){"
-"var img=ctx.createImageData(w,h);var out=img.data;var di=0;"
-"for(var i=0;i+3<data.length;i+=4){"
-"var y0=data[i],u=data[i+1],y1=data[i+2],v=data[i+3];"
-"var c=y0-16,d=u-128,e=v-128;"
-"var r=(298*c+409*e+128)>>8,g=(298*c-100*d-208*e+128)>>8,b=(298*c+516*d+128)>>8;"
-"out[di++]=r<0?0:r>255?255:r;out[di++]=g<0?0:g>255?255:g;"
-"out[di++]=b<0?0:b>255?255:b;out[di++]=255;"
-"c=y1-16;"
-"r=(298*c+409*e+128)>>8;g=(298*c-100*d-208*e+128)>>8;b=(298*c+516*d+128)>>8;"
-"out[di++]=r<0?0:r>255?255:r;out[di++]=g<0?0:g>255?255:g;"
-"out[di++]=b<0?0:b>255?255:b;out[di++]=255}"
-"ctx.putImageData(img,0,0)}"
-
-"var lframes=0,ltime=performance.now();"
-
-"function connectLegacy(){"
-"if(ws)ws.close();"
-"var proto=location.protocol==='https:'?'wss://':'ws://';"
-"ws=new WebSocket(proto+location.host+'/ws');"
-"ws.binaryType='arraybuffer';"
-"addLog('legacy websocket connecting');"
-"ws.onopen=function(){addLog('legacy websocket open','ok');"
-"setMode('legacy ws',true);"
-"vid.style.display='none';cvs.style.display='block';"
-"document.getElementById('idle').style.display='none';"
-"document.getElementById('btnShot').disabled=false;"
-"document.getElementById('liveDot').style.display='inline-block';"
-"allIdle();setStep('stHttp','ok')};"
-"ws.onmessage=function(ev){"
-"if(!(ev.data instanceof ArrayBuffer))return;"
-"var b=new DataView(ev.data);"
-"if(b.byteLength<28||b.getUint32(0,true)!==0x4652414d)return;"
-"var w=b.getUint32(4,true),h=b.getUint32(8,true),sz=b.getUint32(20,true);"
-"if(28+sz>ev.data.byteLength)return;"
-"if(cvs.width!==w||cvs.height!==h){cvs.width=w;cvs.height=h}"
-"yuyvToImage(new Uint8Array(ev.data,28,w*h*2),w,h);"
-"lframes++;"
-"var now=performance.now();"
-"if(now-ltime>1000){document.getElementById('sFps').textContent="
-"Math.round(lframes*1000/(now-ltime));"
-"document.getElementById('sBit').textContent="
-"((lframes*(sz+28)*8)/((now-ltime)/1000)/1000000).toFixed(1);"
-"document.getElementById('tagRes').textContent=w+'x'+h;"
-"lframes=0;ltime=now}};"
-"ws.onclose=function(){addLog('legacy websocket closed');"
-"if(vid.style.display==='none'){vid.style.display='block';cvs.style.display='none'}};"
-"ws.onerror=function(){addLog('legacy websocket error','err')}}"
+"opened through a reverse proxy that cannot forward UDP.')}}"
 
 /* ---------------- actions ---------------- */
 
 "document.getElementById('btnStart').onclick=connectRtc;"
 "document.getElementById('btnStop').onclick=stopRtc;"
-"document.getElementById('btnLegacy').onclick=function(){"
-"if(ws){ws.close();return}"
-"stopRtc();connectLegacy()};"
 "document.getElementById('btnFull').onclick=function(){"
 "var st=document.querySelector('.stage');"
 "if(document.fullscreenElement)document.exitFullscreen();"
 "else if(st.requestFullscreen)st.requestFullscreen()};"
 "document.getElementById('btnShot').onclick=function(){"
 "var s=document.createElement('canvas');"
-"var w=vid.style.display!=='none'?vid.videoWidth||640:cvs.width;"
-"var h=vid.style.display!=='none'?vid.videoHeight||480:cvs.height;"
+"var w=vid.videoWidth||640;"
+"var h=vid.videoHeight||480;"
 "s.width=w;s.height=h;"
-"s.getContext('2d').drawImage(vid.style.display!=='none'?vid:cvs,0,0,w,h);"
+"s.getContext('2d').drawImage(vid,0,0,w,h);"
 "var a=document.createElement('a');"
 "a.download='snapshot-'+Date.now()+'.png';a.href=s.toDataURL('image/png');a.click();"
 "addLog('snapshot saved','ok')};"

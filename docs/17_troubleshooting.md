@@ -14,7 +14,7 @@ flowchart TB
     E -- no --> E1["firewall UDP 50000 to 50008\nno proxy between browser and server"]
     E -- no2["red"] --> E1
     E -- yes --> F{"DTLS step green?"}
-    F -- no --> F1["very old browser or MTU path\ntry legacy mode to confirm media path"]
+    F -- no --> F1["very old browser or MTU path\nverify UDP is not filtered after the\nfirewall (router, VPN, proxy)"]
     F -- yes --> G{"stats show frames decoded?"}
     G -- no --> G1["encoder log lines at startup\ntry -e sw or --test"]
     G -- yes --> H["all good: use stats panel\nfor quality tuning"]
@@ -47,7 +47,7 @@ flowchart TB
 | page opens, ICE stuck on checking | UDP blocked between the peers | open UDP 50000 to 50008 on the server firewall |
 | works on localhost, not across the cable | advertised candidate is the wrong interface | check `interfaces` in `/status`, open the page via the IP you want used |
 | ICE connects, video freezes then resumes | loss bursts on the link | shorten keyframes `-K 1`, lower `-b` |
-| legacy mode works but WebRTC does not | TCP path fine, UDP path broken | firewall, VPN, proxy: eliminate middleboxes |
+| Page loads but media never arrives | TCP 8080 fine, UDP path broken | firewall, VPN, proxy: eliminate middleboxes, open the UDP range |
 | session closes after exactly 15 s | idle timeout: no packets from viewer | browser tab was closed or suspended: expected behavior |
 | two viewers, second gets nothing | UDP ports exhausted | raise `-u` base or check the 8 session limit |
 

@@ -65,5 +65,4 @@ NACK responses replay the stored protected packet verbatim. Receivers accept ide
 ## Remaining known costs
 
 - YUYV to I420 conversion is scalar C. It is memory bandwidth bound at 640x480 (about 0.5 ms) and still fine at 720p; a SIMD pass is a natural next step.
-- The legacy WebSocket path intentionally keeps the old uncompressed format for compatibility, so it remains the emergency path only.
 - One IDR per new viewer costs one large frame burst at the configured bitrate; acceptable on LAN, and mitigated by VBV on the software encoder.

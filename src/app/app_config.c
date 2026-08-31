@@ -192,7 +192,8 @@ void app_config_print_usage(const char *program)
         "\n"
         "Network:\n"
         "  -l, --listen ADDR     HTTP listen address (default 0.0.0.0)\n"
-        "  -p, --http-port N     HTTP and WebSocket port (default 8080)\n"
+        "  -p, --http-port N     HTTP port for the web UI and\n"
+        "                        WebRTC signaling (default 8080)\n"
         "  -u, --udp-port N      base UDP port for media sessions\n"
         "                        (default 50000, one port per viewer)\n"
         "\n"
@@ -222,8 +223,7 @@ void app_config_print_summary(const AppConfig *config)
            config->width, config->height, config->fps);
     printf("encoder       : %s, %u kbps, keyframe every %us\n",
            config->encoder, config->bitrate_kbps, config->keyframe_seconds);
-    printf("http          : http://%s:%u/\n", config->listen, config->http_port);
-    printf("websocket     : ws://%s:%u/ws (legacy fallback)\n",
+    printf("http          : http://%s:%u/  (web UI + WebRTC signaling)\n",
            config->listen, config->http_port);
     printf("udp media     : ports from %u\n", config->udp_base_port);
 }

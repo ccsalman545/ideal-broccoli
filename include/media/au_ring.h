@@ -43,7 +43,6 @@ int au_ring_pop(AuRing *ring,
                 size_t buffer_capacity,
                 AuMeta *meta);
 
-uint64_t au_ring_pushed(const AuRing *ring);
 uint64_t au_ring_dropped(const AuRing *ring);
 
 void au_ring_destroy(AuRing *ring);

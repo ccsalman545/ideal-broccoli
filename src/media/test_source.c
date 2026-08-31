@@ -177,9 +177,10 @@ static void render_frame(struct TestSource *impl, uint8_t *buffer)
      */
     const uint32_t marker_size = height / 12;
     const uint32_t marker_row = bars_h + (height - bars_h) / 2 - marker_size / 2;
+    const uint32_t sweep_steps = impl->fps > 1 ? impl->fps - 1 : 1;
     const uint32_t marker_x =
         (uint32_t) (((impl->sequence % impl->fps) * (width - marker_size)) /
-                    (impl->fps - 1));
+                    sweep_steps);
 
     for (uint32_t row = 0; row < marker_size && marker_row + row < height; row++) {
         uint8_t *out = buffer + (size_t) (marker_row + row) * stride;

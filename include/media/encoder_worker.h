@@ -37,7 +37,6 @@ void encoder_worker_stop(EncoderWorker *worker);
 
 void encoder_worker_join(EncoderWorker *worker);
 
-uint64_t encoder_worker_frames_in(const EncoderWorker *worker);
 uint64_t encoder_worker_frames_encoded(const EncoderWorker *worker);
 
 void encoder_worker_destroy(EncoderWorker *worker);

@@ -121,22 +121,6 @@ void frame_unref(FramePool *pool, Frame *frame)
     pthread_mutex_unlock(&pool->lock);
 }
 
-size_t frame_pool_available(const FramePool *pool)
-{
-    if (pool == NULL) {
-        return 0;
-    }
-    return pool->free_count;
-}
-
-size_t frame_pool_capacity(const FramePool *pool)
-{
-    if (pool == NULL) {
-        return 0;
-    }
-    return pool->count;
-}
-
 void frame_pool_destroy(FramePool *pool)
 {
     if (pool == NULL) {
