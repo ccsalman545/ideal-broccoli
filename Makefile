@@ -77,7 +77,6 @@ APP_SOURCES = \
 	src/media/test_source.c \
 	src/media/yuv_convert.c \
 	src/media/h264_encoder.c \
-	src/media/encoder_x264.c \
 	src/media/encoder_v4l2m2m.c \
 	src/webrtc/ice_lite.c \
 	src/webrtc/dtls_srtp.c \
@@ -86,6 +85,11 @@ APP_SOURCES = \
 	src/webrtc/sdp.c \
 	src/webrtc/webrtc_session.c \
 	third_party/mongoose/mongoose.c
+
+# The libx264 backend is only compiled in when x264 was detected.
+ifeq ($(HAVE_X264),1)
+  APP_SOURCES += src/media/encoder_x264.c
+endif
 
 APP_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(APP_SOURCES))
 

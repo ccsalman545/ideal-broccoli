@@ -52,11 +52,12 @@ struct DtlsSrtp {
     size_t rx_count;
 
     /*
-     * libsrtp2 sessions. srtp_t is opaque in libsrtp2, so the
-     * sessions are referenced by pointer.
+     * libsrtp2 sessions. srtp_t is an opaque pointer typedef in
+     * libsrtp2 (typedef srtp_ctx_t *srtp_t), so a bare srtp_t is
+     * the session handle itself.
      */
-    srtp_t *srtp_out;
-    srtp_t *srtp_in;
+    srtp_t srtp_out;
+    srtp_t srtp_in;
     int srtp_ready;
 
     char expected_fingerprint[128];
