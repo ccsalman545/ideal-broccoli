@@ -48,7 +48,7 @@ flowchart TB
 | works on localhost, not across the cable | advertised candidate is the wrong interface | check `interfaces` in `/status`, open the page via the IP you want used |
 | ICE connects, video freezes then resumes | loss bursts on the link | shorten keyframes `-K 1`, lower `-b` |
 | Page loads but media never arrives | TCP 8080 fine, UDP path broken | firewall, VPN, proxy: eliminate middleboxes, open the UDP range |
-| session closes after exactly 15 s | idle timeout: no packets from viewer | browser tab was closed or suspended: expected behavior |
+| session closes after exactly 15 s | idle timeout: no packets from viewer | look at `stun_rx` / `stun_ok` / `stun_bad_user` in `/status` and the idle-timeout log line: `stun_rx=0` means UDP never arrived; `stun_bad_user>0` means USERNAME did not match the session ice-ufrag |
 | two viewers, second gets nothing | UDP ports exhausted | raise `-u` base or check the 8 session limit |
 
 ## WebRTC diagnostics

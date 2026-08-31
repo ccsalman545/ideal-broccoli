@@ -798,9 +798,9 @@ int app_server_run(const AppConfig *config, volatile sig_atomic_t *stop_flag)
 
                 uint8_t buffer[2048];
                 struct sockaddr_storage source;
-                socklen_t source_len = sizeof(source);
 
                 for (;;) {
+                    socklen_t source_len = sizeof(source);
                     ssize_t received = recvfrom(fds[i].fd,
                                                 buffer, sizeof(buffer),
                                                 0,

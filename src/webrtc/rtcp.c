@@ -87,10 +87,12 @@ void rtcp_parse(const uint8_t *buffer,
 
 
         switch (packet_type) {
-        case 200: {
+        case 205: {
             /*
-             * Generic NACK (RTPFB, FMT=1). FCI entries are
-             * 4-byte ( PID, bitmask of the 16 following seqs ).
+             * Generic NACK (RTPFB PT=205, FMT=1). PT 200 is
+             * Sender Report and must not be parsed as feedback.
+             * FCI entries are 4-byte (PID, bitmask of the 16
+             * following seqs).
              */
             if (count_or_fmt == 1) {
                 const size_t fci = offset + 12;

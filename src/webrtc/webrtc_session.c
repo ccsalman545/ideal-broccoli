@@ -48,6 +48,7 @@ struct RtcSession {
     uint64_t next_sr_ms;
     int idr_requested;
     int streaming_announced;
+    unsigned datagrams_logged;
 
     RtcSessionStats stats;
 
@@ -96,6 +97,37 @@ static void set_state(RtcSession *session, RtcSessionState state)
 /* DTLS callbacks                                                      */
 /* ------------------------------------------------------------------ */
 
+static socklen_t peer_socklen(const struct sockaddr_storage *peer)
+{
+    if (peer->ss_family == AF_INET) {
+        return sizeof(struct sockaddr_in);
+    }
+
+    if (peer->ss_family == AF_INET6) {
+        return sizeof(struct sockaddr_in6);
+    }
+
+    return sizeof(struct sockaddr_storage);
+}
+
+static void format_peer(const struct sockaddr_storage *source,
+                        char *ip, size_t ip_size, uint16_t *port)
+{
+    ip[0] = '?';
+    ip[1] = 0;
+    *port = 0;
+
+    if (source->ss_family == AF_INET) {
+        const struct sockaddr_in *a = (const struct sockaddr_in *) source;
+        inet_ntop(AF_INET, &a->sin_addr, ip, (socklen_t) ip_size);
+        *port = ntohs(a->sin_port);
+    } else if (source->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *a = (const struct sockaddr_in6 *) source;
+        inet_ntop(AF_INET6, &a->sin6_addr, ip, (socklen_t) ip_size);
+        *port = ntohs(a->sin6_port);
+    }
+}
+
 static void dtls_send_udp(void *user, const uint8_t *packet, size_t len)
 {
     RtcSession *session = user;
@@ -106,7 +138,7 @@ static void dtls_send_udp(void *user, const uint8_t *packet, size_t len)
 
     ssize_t sent = sendto(session->udp_fd, packet, len, 0,
                           (struct sockaddr *) &session->remote,
-                          sizeof(session->remote));
+                          peer_socklen(&session->remote));
 
     (void) sent;
 }
@@ -337,6 +369,7 @@ int rtc_session_create(const RtcSessionConfig *config,
                                     session->local_pwd,
                                     config->advertise_ip,
                                     session->udp_port,
+                                    ssrc,
                                     answer_sdp,
                                     answer_capacity);
 
@@ -350,8 +383,9 @@ int rtc_session_create(const RtcSessionConfig *config,
 
     *session_out = session;
 
-    printf("rtc %08x: created, UDP %u, payload type %d\n",
-           config->id, session->udp_port, config->offer.h264_payload_type);
+    printf("rtc %08x: created, UDP %u, ice-ufrag %s, payload type %d\n",
+           config->id, session->udp_port, session->local_ufrag,
+           config->offer.h264_payload_type);
 
     return 0;
 }
@@ -372,58 +406,83 @@ void rtc_session_on_udp(RtcSession *session,
 
     session->last_rx_ms = now_ms();
 
-    switch (rtc_classify_packet(buffer, length)) {
+    char ip[INET6_ADDRSTRLEN];
+    uint16_t port = 0;
+    format_peer(source, ip, sizeof(ip), &port);
+
+    RtcPacketClass kind = rtc_classify_packet(buffer, length);
+
+    if (session->datagrams_logged < 8) {
+        const char *name = "other";
+
+        if (kind == RTC_PKT_STUN) {
+            name = "STUN";
+        } else if (kind == RTC_PKT_DTLS) {
+            name = "DTLS";
+        } else if (kind == RTC_PKT_RTP) {
+            name = "RTP/RTCP";
+        }
+
+        printf("rtc %08x: UDP %s %zu bytes from %s:%u\n",
+               session->config.id, name, length, ip, port);
+        session->datagrams_logged++;
+    }
+
+    switch (kind) {
 
     case RTC_PKT_STUN: {
         uint8_t tid[12];
+        char username[160] = "";
 
-        if (stun_is_binding_request(buffer, length, tid) &&
-            stun_username_matches(buffer, length, session->local_ufrag)) {
-            /*
-             * Valid connectivity check: lock the peer address
-             * and answer.
-             */
-            if (!session->have_remote) {
-                session->remote = *source;
-                session->have_remote = 1;
+        session->stats.stun_rx++;
+        stun_copy_username(buffer, length, username, sizeof(username));
 
-                char ip[INET6_ADDRSTRLEN] = "?";
-                uint16_t port = 0;
+        if (!stun_is_binding_request(buffer, length, tid)) {
+            printf("rtc %08x: STUN ignored (not a binding request) "
+                   "from %s:%u len=%zu\n",
+                   session->config.id, ip, port, length);
+            break;
+        }
 
-                if (source->ss_family == AF_INET) {
-                    const struct sockaddr_in *a =
-                        (const struct sockaddr_in *) source;
-                    inet_ntop(AF_INET, &a->sin_addr, ip, sizeof(ip));
-                    port = ntohs(a->sin_port);
-                } else if (source->ss_family == AF_INET6) {
-                    const struct sockaddr_in6 *a =
-                        (const struct sockaddr_in6 *) source;
-                    inet_ntop(AF_INET6, &a->sin6_addr, ip, sizeof(ip));
-                    port = ntohs(a->sin6_port);
-                }
+        if (!stun_username_matches(buffer, length, session->local_ufrag)) {
+            session->stats.stun_bad_user++;
+            printf("rtc %08x: STUN username mismatch from %s:%u "
+                   "(got '%s', want '%s:<peer-ufrag>')\n",
+                   session->config.id, ip, port,
+                   username[0] ? username : "(missing)",
+                   session->local_ufrag);
+            break;
+        }
 
-                printf("rtc %08x: ICE peer %s:%u\n",
-                       session->config.id, ip, port);
-            }
+        session->stats.stun_ok++;
 
-            if (session->state == RTC_NEW) {
-                set_state(session, RTC_ICE);
-            }
+        /*
+         * Valid connectivity check: lock the peer address
+         * and answer.
+         */
+        if (!session->have_remote) {
+            session->remote = *source;
+            session->have_remote = 1;
 
-            uint8_t response[128];
-            size_t response_len = 0;
+            printf("rtc %08x: ICE validated (%s:%u) username=%s\n",
+                   session->config.id, ip, port, username);
+        }
 
-            if (stun_build_binding_response(session->local_pwd,
-                                            buffer, length,
-                                            source,
-                                            response, sizeof(response),
-                                            &response_len) == 0) {
-                sendto(session->udp_fd, response, response_len, 0,
-                       (struct sockaddr *) source,
-                       source->ss_family == AF_INET ?
-                           sizeof(struct sockaddr_in) :
-                           sizeof(struct sockaddr_storage));
-            }
+        if (session->state == RTC_NEW) {
+            set_state(session, RTC_ICE);
+        }
+
+        uint8_t response[128];
+        size_t response_len = 0;
+
+        if (stun_build_binding_response(session->local_pwd,
+                                        buffer, length,
+                                        source,
+                                        response, sizeof(response),
+                                        &response_len) == 0) {
+            sendto(session->udp_fd, response, response_len, 0,
+                   (struct sockaddr *) source,
+                   peer_socklen(source));
         }
         break;
     }
@@ -431,6 +490,9 @@ void rtc_session_on_udp(RtcSession *session,
     case RTC_PKT_DTLS:
         if (session->have_remote) {
             dtls_srtp_on_udp(session->dtls, buffer, length);
+        } else {
+            printf("rtc %08x: DTLS before ICE from %s:%u, %zu bytes\n",
+                   session->config.id, ip, port, length);
         }
         break;
 
@@ -471,7 +533,11 @@ void rtc_session_tick(RtcSession *session, uint64_t now)
      * forever).
      */
     if (now - session->last_rx_ms > SESSION_IDLE_TIMEOUT_MS) {
-        printf("rtc %08x: idle timeout\n", session->config.id);
+        printf("rtc %08x: idle timeout (stun_rx=%u stun_ok=%u stun_bad_user=%u)\n",
+               session->config.id,
+               session->stats.stun_rx,
+               session->stats.stun_ok,
+               session->stats.stun_bad_user);
         rtc_session_close(session);
         return;
     }

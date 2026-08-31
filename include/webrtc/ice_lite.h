@@ -53,7 +53,18 @@ int stun_is_binding_request(const uint8_t *buf, size_t len,
                             uint8_t tid[12]);
 
 /*
- * Check the USERNAME attribute starts with "<local-ufrag>:".
+ * Copy the STUN USERNAME attribute into a C string (truncated
+ * to out_size - 1). Returns 0 on success, -1 when absent.
+ */
+int stun_copy_username(const uint8_t *buf, size_t len,
+                       char *out, size_t out_size);
+
+/*
+ * RFC 8445 §7.3: a connectivity-check USERNAME is
+ * "<receiver-ufrag>:<sender-ufrag>". For a browser check aimed
+ * at this ICE-lite agent that means the attribute MUST start
+ * with "<local-ufrag>:". The reversed form is also accepted so
+ * a peer that swapped the fragments still gets an answer.
  */
 int stun_username_matches(const uint8_t *buf, size_t len,
                           const char *local_ufrag);

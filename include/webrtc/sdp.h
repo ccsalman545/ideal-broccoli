@@ -48,6 +48,7 @@ size_t sdp_build_answer(const SdpOffer *offer,
                         const char *local_pwd,
                         const char *advertise_ip,
                         uint16_t udp_port,
+                        uint32_t ssrc,
                         char *out,
                         size_t out_capacity);
 

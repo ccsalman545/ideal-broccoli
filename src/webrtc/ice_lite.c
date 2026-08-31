@@ -194,11 +194,41 @@ int stun_is_binding_request(const uint8_t *buf, size_t len,
     return 1;
 }
 
+int stun_copy_username(const uint8_t *buf, size_t len,
+                       char *out, size_t out_size)
+{
+    const uint8_t *username = NULL;
+    size_t username_len = 0;
+
+    if (out == NULL || out_size == 0) {
+        return -1;
+    }
+
+    out[0] = 0;
+
+    if (!stun_find_attribute(buf, len, 0x0006, &username, &username_len)) {
+        return -1;
+    }
+
+    if (username_len >= out_size) {
+        username_len = out_size - 1;
+    }
+
+    memcpy(out, username, username_len);
+    out[username_len] = 0;
+
+    return 0;
+}
+
 int stun_username_matches(const uint8_t *buf, size_t len,
                           const char *local_ufrag)
 {
     const uint8_t *username = NULL;
     size_t username_len = 0;
+
+    if (local_ufrag == NULL || local_ufrag[0] == 0) {
+        return 0;
+    }
 
     if (!stun_find_attribute(buf, len, 0x0006, &username, &username_len)) {
         return 0;
@@ -206,11 +236,36 @@ int stun_username_matches(const uint8_t *buf, size_t len,
 
     size_t ufrag_len = strlen(local_ufrag);
 
-    if (username_len <= ufrag_len || username[ufrag_len] != ':') {
-        return 0;
+    /*
+     * RFC 8445 §7.3: the first component is the RECEIVER's
+     * ufrag. A browser check therefore arrives as
+     * "<server-ufrag>:<browser-ufrag>". Treating our ufrag as
+     * the second component (the usual ICE-role mix-up) would
+     * drop every well-formed check.
+     */
+    if (username_len > ufrag_len &&
+        username[ufrag_len] == ':' &&
+        memcmp(username, local_ufrag, ufrag_len) == 0) {
+        return 1;
     }
 
-    return memcmp(username, local_ufrag, ufrag_len) == 0;
+    /*
+     * Defensive fallback: accept the reversed ordering so a
+     * peer that swapped the fragments still completes ICE.
+     */
+    const uint8_t *colon = memchr(username, ':', username_len);
+
+    if (colon != NULL) {
+        const uint8_t *second = colon + 1;
+        size_t second_len = (size_t) ((username + username_len) - second);
+
+        if (second_len == ufrag_len &&
+            memcmp(second, local_ufrag, ufrag_len) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 int stun_build_binding_response(const char *local_pwd,
